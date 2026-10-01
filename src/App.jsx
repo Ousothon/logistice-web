@@ -619,10 +619,12 @@ function getSystemSettings() {
 function saveSystemSettings(next) {
   const normalized = mergeSystemSettings(next);
   SYSTEM_SETTINGS_CACHE = normalized;
-  // Local storage is only a fallback for UI-only/offline mode.
-  // When Supabase is configured, Supabase is the source of truth.
-  if (!supabase) {
+  // Supabase stays the source of truth, but we ALWAYS keep a local copy too so
+  // the Login page (no session yet) can still show the company name/logo.
+  try {
     localStorage.setItem(SYSTEM_SETTINGS_KEY, JSON.stringify(normalized));
+  } catch {
+    /* storage unavailable */
   }
   window.dispatchEvent(
     new CustomEvent("cargo-bridge-settings-updated", { detail: normalized }),
@@ -640,6 +642,11 @@ async function fetchSystemSettingsRemote() {
   if (!data) return null;
   const normalized = mergeSystemSettings(data);
   SYSTEM_SETTINGS_CACHE = normalized;
+  try {
+    localStorage.setItem(SYSTEM_SETTINGS_KEY, JSON.stringify(normalized));
+  } catch {
+    /* storage unavailable */
+  }
   return normalized;
 }
 
@@ -3551,7 +3558,7 @@ function PackageTrackingProvider({ children }) {
   }, []);
 
   const refetch = React.useCallback(async () => {
-    if (!supabase) return;
+    if (!supabase || !scopeUser) return; // not signed in (e.g. /login) → RLS would 401
     setLoading(true);
     const { data, error } = await supabase
       .from("packages")
@@ -3583,7 +3590,7 @@ function PackageTrackingProvider({ children }) {
     // On error (e.g. RLS not configured yet), keep whatever's cached rather
     // than blanking the screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scopeUser?.id]);
 
   useEffect(() => {
     refetch();
@@ -3594,7 +3601,7 @@ function PackageTrackingProvider({ children }) {
   // status update. Realtime is best-effort; the focus/visibility refetch is a
   // second safety net for environments where Realtime is not enabled.
   useEffect(() => {
-    if (!supabase) return undefined;
+    if (!supabase || !scopeUser) return undefined;
 
     const channel = supabase
       .channel("cargo-bridge-packages-sync")
