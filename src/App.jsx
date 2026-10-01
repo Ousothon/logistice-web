@@ -468,6 +468,318 @@ function generateMockCustomerId() {
 }
 
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// System Settings — company identity, shipping policy and print labels
+// ------------------------------------------------------------
+const SYSTEM_SETTINGS_KEY = "cargo_bridge_system_settings_v1";
+let SYSTEM_SETTINGS_CACHE = null;
+const DEFAULT_CARGO_POLICIES = {
+  Normal: {
+    sizeRates: { S: 1.5, M: 3, L: 4 },
+    weightRate: 600,
+    cbmRate: 200,
+    minimumFreight: 220,
+    deliveryFee: 0,
+    branchDeliveryFee: 0,
+    handlingFee: 0,
+  },
+  Sensitive: {
+    sizeRates: { S: 2, M: 4, L: 5.5 },
+    weightRate: 800,
+    cbmRate: 300,
+    minimumFreight: 300,
+    deliveryFee: 0,
+    branchDeliveryFee: 0,
+    handlingFee: 0,
+  },
+};
+
+const DEFAULT_SYSTEM_SETTINGS = {
+  company: {
+    name: "Cargo Bridge",
+    shortName: "CB",
+    logoDataUrl: "",
+    logoUrl: "",
+    phone: "",
+    email: "",
+    address: "",
+    website: "",
+    currency: "USD",
+  },
+  shipping: {
+    pricingMethod: "fixed_size",
+    currency: "USD",
+    // Legacy aliases are kept so older screens continue to work. New freight
+    // calculations use cargoPolicies.Normal / cargoPolicies.Sensitive.
+    sizeRates: { ...DEFAULT_CARGO_POLICIES.Normal.sizeRates },
+    weightRate: DEFAULT_CARGO_POLICIES.Normal.weightRate,
+    cbmRate: DEFAULT_CARGO_POLICIES.Normal.cbmRate,
+    minimumFreight: DEFAULT_CARGO_POLICIES.Normal.minimumFreight,
+    deliveryFee: DEFAULT_CARGO_POLICIES.Normal.deliveryFee,
+    branchDeliveryFee: DEFAULT_CARGO_POLICIES.Normal.branchDeliveryFee,
+    handlingFee: DEFAULT_CARGO_POLICIES.Normal.handlingFee,
+    cargoPolicies: JSON.parse(JSON.stringify(DEFAULT_CARGO_POLICIES)),
+    effectiveDate: new Date().toISOString().slice(0, 10),
+    policyName: "Default Shipping Policy",
+  },
+  label: {
+    showLogo: true,
+    showCompanyName: true,
+    showPhone: true,
+    showEmail: false,
+    showAddress: false,
+    showBarcode: true,
+    showQr: true,
+    showFreight: true,
+    showContainer: true,
+  },
+};
+
+function mergeSystemSettings(saved) {
+  const value = saved || {};
+  const legacyShipping = value.shipping || {};
+  const savedCargoPolicies = legacyShipping.cargoPolicies || {};
+  const cargoPolicies = {
+    Normal: {
+      ...DEFAULT_CARGO_POLICIES.Normal,
+      ...(savedCargoPolicies.Normal || {}),
+      sizeRates: {
+        ...DEFAULT_CARGO_POLICIES.Normal.sizeRates,
+        ...((savedCargoPolicies.Normal || {}).sizeRates || {}),
+      },
+    },
+    Sensitive: {
+      ...DEFAULT_CARGO_POLICIES.Sensitive,
+      ...(savedCargoPolicies.Sensitive || {}),
+      sizeRates: {
+        ...DEFAULT_CARGO_POLICIES.Sensitive.sizeRates,
+        ...((savedCargoPolicies.Sensitive || {}).sizeRates || {}),
+      },
+    },
+  };
+  // If this is an older saved policy with only one set of rates, preserve it
+  // as Normal rather than losing the user's existing values.
+  if (!savedCargoPolicies.Normal && legacyShipping.sizeRates) {
+    cargoPolicies.Normal.sizeRates = {
+      ...cargoPolicies.Normal.sizeRates,
+      ...legacyShipping.sizeRates,
+    };
+    if (legacyShipping.weightRate != null)
+      cargoPolicies.Normal.weightRate = Number(legacyShipping.weightRate);
+    if (legacyShipping.cbmRate != null)
+      cargoPolicies.Normal.cbmRate = Number(legacyShipping.cbmRate);
+    if (legacyShipping.minimumFreight != null)
+      cargoPolicies.Normal.minimumFreight = Number(
+        legacyShipping.minimumFreight,
+      );
+    if (legacyShipping.deliveryFee != null)
+      cargoPolicies.Normal.deliveryFee = Number(legacyShipping.deliveryFee);
+    if (legacyShipping.branchDeliveryFee != null)
+      cargoPolicies.Normal.branchDeliveryFee = Number(
+        legacyShipping.branchDeliveryFee,
+      );
+    if (legacyShipping.handlingFee != null)
+      cargoPolicies.Normal.handlingFee = Number(legacyShipping.handlingFee);
+  }
+  return {
+    ...DEFAULT_SYSTEM_SETTINGS,
+    ...value,
+    company: {
+      ...DEFAULT_SYSTEM_SETTINGS.company,
+      ...(value.company || {}),
+      // logoDataUrl is kept only for backward compatibility with old local data.
+      logoDataUrl: value.company?.logoDataUrl || "",
+    },
+    shipping: {
+      ...DEFAULT_SYSTEM_SETTINGS.shipping,
+      ...(value.shipping || {}),
+      sizeRates: {
+        ...DEFAULT_SYSTEM_SETTINGS.shipping.sizeRates,
+        ...((value.shipping || {}).sizeRates || {}),
+      },
+      cargoPolicies,
+    },
+    label: { ...DEFAULT_SYSTEM_SETTINGS.label, ...(value.label || {}) },
+  };
+}
+
+function getSystemSettings() {
+  if (SYSTEM_SETTINGS_CACHE) return SYSTEM_SETTINGS_CACHE;
+  try {
+    const raw = localStorage.getItem(SYSTEM_SETTINGS_KEY);
+    SYSTEM_SETTINGS_CACHE = raw
+      ? mergeSystemSettings(JSON.parse(raw))
+      : mergeSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+  } catch {
+    SYSTEM_SETTINGS_CACHE = mergeSystemSettings(DEFAULT_SYSTEM_SETTINGS);
+  }
+  return SYSTEM_SETTINGS_CACHE;
+}
+
+function saveSystemSettings(next) {
+  const normalized = mergeSystemSettings(next);
+  SYSTEM_SETTINGS_CACHE = normalized;
+  // Local storage is only a fallback for UI-only/offline mode.
+  // When Supabase is configured, Supabase is the source of truth.
+  if (!supabase) {
+    localStorage.setItem(SYSTEM_SETTINGS_KEY, JSON.stringify(normalized));
+  }
+  window.dispatchEvent(
+    new CustomEvent("cargo-bridge-settings-updated", { detail: normalized }),
+  );
+}
+
+async function fetchSystemSettingsRemote() {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("system_settings")
+    .select("company,shipping,label")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const normalized = mergeSystemSettings(data);
+  SYSTEM_SETTINGS_CACHE = normalized;
+  return normalized;
+}
+
+async function saveSystemSettingsRemote(next, userId = null) {
+  if (!supabase) return { data: next, error: null };
+  const payload = {
+    id: 1,
+    company: { ...next.company, logoDataUrl: "" },
+    shipping: next.shipping,
+    label: next.label,
+    updated_at: new Date().toISOString(),
+    updated_by: userId || null,
+  };
+  const { data, error } = await supabase
+    .from("system_settings")
+    .upsert(payload, { onConflict: "id" })
+    .select("company,shipping,label")
+    .single();
+  if (error) throw error;
+  const normalized = mergeSystemSettings(data);
+  SYSTEM_SETTINGS_CACHE = normalized;
+  window.dispatchEvent(
+    new CustomEvent("cargo-bridge-settings-updated", { detail: normalized }),
+  );
+  return { data: normalized, error: null };
+}
+
+async function fetchPolicyHistoryRemote() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("shipping_policies")
+    .select(
+      "id,policy_name,effective_date,pricing_method,currency,size_rates,weight_rate,cbm_rate,minimum_freight,delivery_fee,branch_delivery_fee,handling_fee,cargo_rates,created_at",
+    )
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return (data || []).map((x) => ({
+    id: x.id,
+    name: x.policy_name,
+    effectiveDate: x.effective_date,
+    savedAt: x.created_at,
+    rates: x.size_rates || {},
+    pricingMethod: x.pricing_method,
+    currency: x.currency,
+    weightRate: x.weight_rate,
+    cbmRate: x.cbm_rate,
+    minimumFreight: x.minimum_freight,
+    deliveryFee: x.delivery_fee,
+    branchDeliveryFee: x.branch_delivery_fee,
+    handlingFee: x.handling_fee,
+    cargoPolicies: x.cargo_rates || null,
+  }));
+}
+
+async function insertShippingPolicyRemote(shipping, userId = null) {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("shipping_policies")
+    .insert({
+      policy_name: shipping.policyName,
+      effective_date: shipping.effectiveDate,
+      pricing_method: shipping.pricingMethod,
+      currency: shipping.currency,
+      size_rates: shipping.sizeRates,
+      weight_rate: Number(shipping.weightRate || 0),
+      cbm_rate: Number(shipping.cbmRate || 0),
+      minimum_freight: Number(shipping.minimumFreight || 0),
+      delivery_fee: Number(shipping.deliveryFee || 0),
+      branch_delivery_fee: Number(shipping.branchDeliveryFee || 0),
+      handling_fee: Number(shipping.handlingFee || 0),
+      cargo_rates: shipping.cargoPolicies || DEFAULT_CARGO_POLICIES,
+      created_by: userId || null,
+    })
+    .select("id,policy_name,effective_date,created_at,size_rates")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function uploadCompanyLogoRemote(file, userId = null) {
+  if (!supabase) return null;
+  const ext =
+    (file.name?.split(".").pop() || "png")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "") || "png";
+  const path = `company/logo-${Date.now()}-${userId || "system"}.${ext}`;
+  const { error } = await supabase.storage
+    .from("company-assets")
+    .upload(path, file, {
+      contentType: file.type || "image/png",
+      upsert: false,
+    });
+  if (error) throw error;
+  return supabase.storage.from("company-assets").getPublicUrl(path).data
+    .publicUrl;
+}
+
+async function removeCompanyLogoRemote(logoUrl) {
+  if (!supabase || !logoUrl) return;
+  try {
+    const marker = "/storage/v1/object/public/company-assets/";
+    const idx = logoUrl.indexOf(marker);
+    if (idx < 0) return;
+    const path = decodeURIComponent(logoUrl.slice(idx + marker.length));
+    await supabase.storage.from("company-assets").remove([path]);
+  } catch (err) {
+    console.warn("[Company Logo] remove failed", err);
+  }
+}
+
+function useSystemSettings() {
+  const [settings, setSettings] = useState(() => getSystemSettings());
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => setSettings(getSystemSettings());
+    window.addEventListener("cargo-bridge-settings-updated", refresh);
+    if (supabase) {
+      fetchSystemSettingsRemote()
+        .then((remote) => {
+          if (alive && remote) {
+            SYSTEM_SETTINGS_CACHE = mergeSystemSettings(remote);
+            setSettings(SYSTEM_SETTINGS_CACHE);
+            window.dispatchEvent(
+              new CustomEvent("cargo-bridge-settings-updated", {
+                detail: SYSTEM_SETTINGS_CACHE,
+              }),
+            );
+          }
+        })
+        .catch((err) => console.error("[System Settings] load failed", err));
+    }
+    return () => {
+      alive = false;
+      window.removeEventListener("cargo-bridge-settings-updated", refresh);
+    };
+  }, []);
+  return settings;
+}
+
 // lib/nav.js
 // ------------------------------------------------------------
 // Mirrors "Main Menu" (section 35) of the system blueprint.
@@ -551,6 +863,7 @@ const NAV_SECTIONS = [
       { label: "Role Management", icon: "ShieldCheck", path: "/roles" },
       { label: "Status Master", icon: "ListChecks", path: "/status-master" },
       { label: "Audit Logs", icon: "History", path: "/audit-logs" },
+      { label: "Settings", icon: "Settings", path: "/settings" },
     ],
   },
 ];
@@ -1760,6 +2073,7 @@ function formatDbTimestamp(iso) {
 //     add column if not exists order_no text,
 //     add column if not exists product_name text,
 //     add column if not exists cargo_type text,
+//     add column if not exists package_type text default 'small_package',
 //     add column if not exists size_class text,
 //     add column if not exists length_cm numeric,
 //     add column if not exists width_cm numeric,
@@ -1854,7 +2168,7 @@ function money(n) {
 
 function sizeLabel(size) {
   if (!size) return "—";
-  return size === "OVER" ? "> L (Oversize)" : size;
+  return size === "OVER" ? "Dimension Based (> L)" : size;
 }
 
 // CBM = L × W × H (cm) / 1,000,000, rounded to 3 decimals. Returns null
@@ -1868,28 +2182,76 @@ function computeCbm(length, width, height) {
 }
 
 // S/M/L → fixed price. "OVER" (> L) → CBM × rate for the cargo type.
-function calcFreight({ cargoType, sizeClass, length, width, height }) {
+function calcFreight({
+  cargoType,
+  sizeClass,
+  packageType,
+  length,
+  width,
+  height,
+  weight,
+}) {
   const cbm = computeCbm(length, width, height);
-  if (!cargoType) return { ok: false, message: "សូមជ្រើសរើស Cargo Type", cbm };
-  if (!sizeClass) return { ok: false, message: "សូមជ្រើសរើស Size", cbm };
-  if (sizeClass === "OVER") {
-    if (cbm == null)
-      return {
-        ok: false,
-        message: "សូមបញ្ចូល Length, Width, Height (លេខវិជ្ជមាន)",
-        cbm,
-      };
-    const rate = CBM_RATES[cargoType];
+  if (!cargoType)
+    return { ok: false, message: "Please select Cargo Type", cbm };
+
+  const type = cargoType === "Sensitive" ? "Sensitive" : "Normal";
+  const policy =
+    getSystemSettings().shipping || DEFAULT_SYSTEM_SETTINGS.shipping;
+  const cargoPolicy =
+    (policy.cargoPolicies || DEFAULT_CARGO_POLICIES)[type] ||
+    DEFAULT_CARGO_POLICIES[type];
+  const effectivePackageType =
+    packageType || (sizeClass === "OVER" ? "dimension_based" : "small_package");
+
+  if (effectivePackageType === "small_package") {
+    if (!["S", "M", "L"].includes(sizeClass)) {
+      return { ok: false, message: "Please select Size S, M or L", cbm };
+    }
+    const rate = Number(cargoPolicy.sizeRates?.[sizeClass] || 0);
+    if (!(rate >= 0))
+      return { ok: false, message: "Size rate is not configured", cbm };
+    const fee = rate;
     return {
       ok: true,
-      method: "CBM",
+      method: "Fixed Size",
       rate,
-      cbm,
-      fee: Math.round(cbm * rate * 100) / 100,
+      cbm: null,
+      fee: Math.round(fee * 100) / 100,
+      policyCurrency: policy.currency || "USD",
+      cargoType: type,
+      packageType: "small_package",
     };
   }
-  const rate = SIZE_PRICES[sizeClass];
-  return { ok: true, method: "Fixed", rate, cbm, fee: rate };
+
+  if (effectivePackageType !== "dimension_based") {
+    return { ok: false, message: "Please select a Package Type", cbm };
+  }
+  if (cbm == null) {
+    return {
+      ok: false,
+      message: "Please enter Length, Width and Height as positive numbers",
+      cbm,
+    };
+  }
+
+  const configuredCbmRate = Number(cargoPolicy.cbmRate || 0);
+  if (!(configuredCbmRate > 0)) {
+    return { ok: false, message: `${type} CBM rate is not configured`, cbm };
+  }
+
+  const rate = configuredCbmRate;
+  const fee = Math.max(cbm * rate, Number(cargoPolicy.minimumFreight || 0));
+  return {
+    ok: true,
+    method: "CBM",
+    rate,
+    cbm,
+    fee: Math.round(fee * 100) / 100,
+    policyCurrency: policy.currency || "USD",
+    cargoType: type,
+    packageType: "dimension_based",
+  };
 }
 
 function rateLabel(pkg) {
@@ -3112,6 +3474,7 @@ const PACKAGE_TABLE_COLUMNS = [
   "order_no",
   "product_name",
   "cargo_type",
+  "package_type",
   "size_class",
   "length_cm",
   "width_cm",
@@ -4418,28 +4781,49 @@ function CargoCalculator({
   setOverride,
 }) {
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
-  const dims =
-    calc.cbm != null
-      ? `${form.length} × ${form.width} × ${form.height} cm`
-      : "—";
+  const policy =
+    getSystemSettings().shipping || DEFAULT_SYSTEM_SETTINGS.shipping;
+  const type = form.cargoType === "Sensitive" ? "Sensitive" : "Normal";
+  const cargoPolicy =
+    (policy.cargoPolicies || DEFAULT_CARGO_POLICIES)[type] ||
+    DEFAULT_CARGO_POLICIES[type];
+  const policyCurrency = policy.currency || "USD";
+  const displayMoney = (n) => `${policyCurrency} ${Number(n || 0).toFixed(2)}`;
+  const dimensionMode = form.packageType === "dimension_based";
+
+  const selectCargoType = (t) => setForm((f) => ({ ...f, cargoType: t }));
+  const selectPackageType = (t) =>
+    setForm((f) => ({
+      ...f,
+      packageType: t,
+      sizeClass:
+        t === "dimension_based"
+          ? "OVER"
+          : f.sizeClass === "OVER"
+            ? ""
+            : f.sizeClass,
+      length: t === "dimension_based" ? f.length : "",
+      width: t === "dimension_based" ? f.width : "",
+      height: t === "dimension_based" ? f.height : "",
+    }));
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div>
         <label className={LABEL_CLS}>
           Cargo Type <span className="text-signal-red">*</span>
         </label>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           {CARGO_TYPES.map((t) => (
             <button
               key={t}
               type="button"
-              onClick={() => setForm((f) => ({ ...f, cargoType: t }))}
-              className={segBtn(form.cargoType === t)}
+              onClick={() => selectCargoType(t)}
+              className={`${segBtn(form.cargoType === t)} text-left px-4`}
             >
-              {t} Cargo
-              <span className="block text-[11px] font-normal opacity-75">
-                ${CBM_RATES[t]} / CBM
+              <span className="block font-semibold">{t} Cargo</span>
+              <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+                {displayMoney(cargoPolicyFor(t, policy).cbmRate)} / CBM
               </span>
             </button>
           ))}
@@ -4448,66 +4832,110 @@ function CargoCalculator({
 
       <div>
         <label className={LABEL_CLS}>
-          Size <span className="text-signal-red">*</span>
+          Package Type <span className="text-signal-red">*</span>
         </label>
-        <div className="flex gap-2">
-          {SIZE_CHOICES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setForm((f) => ({ ...f, sizeClass: s }))}
-              className={segBtn(form.sizeClass === s)}
-            >
-              {s === "OVER" ? "> L" : s}
-              <span className="block text-[11px] font-normal opacity-75">
-                {s === "OVER" ? "CBM" : money(SIZE_PRICES[s])}
-              </span>
-            </button>
-          ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <button
+            type="button"
+            onClick={() => selectPackageType("small_package")}
+            className={`${segBtn(form.packageType === "small_package")} text-left px-4`}
+          >
+            <span className="block font-semibold">📦 Small Package</span>
+            <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+              Use predefined Size S / M / L
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => selectPackageType("dimension_based")}
+            className={`${segBtn(form.packageType === "dimension_based")} text-left px-4`}
+          >
+            <span className="block font-semibold">📐 Dimension Based</span>
+            <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+              For cargo larger than Size L
+            </span>
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-        {[
-          ["length", "Length (cm)"],
-          ["width", "Width (cm)"],
-          ["height", "Height (cm)"],
-        ].map(([key, label]) => (
-          <div key={key}>
-            <label className={LABEL_CLS}>
-              {label}
-              {form.sizeClass === "OVER" && (
-                <span className="text-signal-red"> *</span>
-              )}
-            </label>
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="any"
-              value={form[key]}
-              onChange={set(key)}
-              className={INPUT_CLS}
-              placeholder="0"
-            />
-          </div>
-        ))}
+      {!dimensionMode ? (
         <div>
-          <label className={LABEL_CLS}>Weight (KG)</label>
-          <input
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="any"
-            value={form.weight}
-            onChange={set("weight")}
-            className={INPUT_CLS}
-            placeholder="12.5"
-          />
+          <label className={LABEL_CLS}>
+            Package Size <span className="text-signal-red">*</span>
+          </label>
+          <div className="grid grid-cols-3 gap-2.5">
+            {["S", "M", "L"].map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, sizeClass: s }))}
+                className={`${segBtn(form.sizeClass === s)} min-h-[62px]`}
+              >
+                <span className="block text-base font-bold">Size {s}</span>
+                <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+                  {displayMoney(cargoPolicy.sizeRates?.[s])}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
+      ) : (
+        <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-600 text-white grid place-items-center shrink-0">
+              <Icons.Ruler size={18} />
+            </div>
+            <div>
+              <div className="font-bold text-sm text-slate-900">
+                Actual dimensions
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                CBM is calculated from the real package size and uses the {type}{" "}
+                CBM rate.
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4">
+            {[
+              ["length", "Length (cm)"],
+              ["width", "Width (cm)"],
+              ["height", "Height (cm)"],
+            ].map(([key, label]) => (
+              <div key={key}>
+                <label className={LABEL_CLS}>
+                  {label} <span className="text-signal-red">*</span>
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  value={form[key]}
+                  onChange={set(key)}
+                  className={INPUT_CLS}
+                  placeholder="0"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className={LABEL_CLS}>Weight (KG)</label>
+        <input
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="any"
+          value={form.weight}
+          onChange={set("weight")}
+          className={INPUT_CLS}
+          placeholder="12.5"
+        />
       </div>
 
-      <div className="border border-mist-200 rounded-md bg-mist-50/60 p-4">
+      <div className="border border-mist-200 rounded-xl bg-mist-50/60 p-4">
         <div className="flex items-center justify-between mb-3">
           <h4 className="font-display font-bold text-sm text-ink-900">
             Freight Calculation
@@ -4521,12 +4949,17 @@ function CargoCalculator({
           items={[
             { label: "Cargo Type", value: form.cargoType || "—" },
             {
-              label: "Size",
-              value: form.sizeClass ? sizeLabel(form.sizeClass) : "—",
+              label: "Package Type",
+              value: dimensionMode ? "Dimension Based" : "Small Package",
             },
-            ...(form.sizeClass === "OVER" || calc.cbm != null
+            {
+              label: "Size",
+              value: dimensionMode
+                ? "Dimension Based (> L)"
+                : form.sizeClass || "—",
+            },
+            ...(dimensionMode
               ? [
-                  { label: "Dimension", value: dims },
                   {
                     label: "CBM",
                     value: calc.cbm != null ? `${calc.cbm.toFixed(3)} m³` : "—",
@@ -4537,567 +4970,58 @@ function CargoCalculator({
               label: "Rate",
               value: calc.ok
                 ? calc.method === "CBM"
-                  ? `$${calc.rate} / CBM`
-                  : money(calc.rate)
+                  ? `${displayMoney(calc.rate)} / CBM`
+                  : displayMoney(calc.rate)
                 : "—",
             },
             {
+              label: "Minimum Freight",
+              value: displayMoney(cargoPolicy.minimumFreight),
+            },
+            {
               label: "Freight Fee",
-              value: (
-                <span className="text-base font-bold text-signal-blue">
-                  {finalFee != null ? money(finalFee) : "—"}
-                </span>
-              ),
+              value: finalFee != null ? displayMoney(finalFee) : "—",
             },
           ]}
         />
-        {!calc.ok && (
-          <p className="text-xs text-ink-600/50 mt-3">{calc.message}</p>
-        )}
-        {calc.ok && override.on && (
-          <p className="text-xs text-[#B87415] mt-3">
-            Override — តម្លៃស្វ័យប្រវត្តិ {money(calc.fee)}
-          </p>
-        )}
-
-        {canOverride && calc.ok && (
-          <div className="mt-3 pt-3 border-t border-mist-200">
-            <label className="flex items-center gap-2 text-sm text-ink-700">
-              <input
-                type="checkbox"
-                checked={override.on}
-                onChange={(e) =>
-                  setOverride({
-                    on: e.target.checked,
-                    value: e.target.checked ? String(calc.fee) : "",
-                  })
-                }
-              />
-              Override Freight Fee (Super Admin)
-            </label>
-            {override.on && (
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={override.value}
-                onChange={(e) =>
-                  setOverride({ on: true, value: e.target.value })
-                }
-                className={`${INPUT_CLS} mt-2 max-w-[160px]`}
-              />
-            )}
-          </div>
-        )}
       </div>
-    </div>
-  );
-}
 
-// ------------------------------------------------------------
-// components/CustomerDetailsCard.jsx
-// ------------------------------------------------------------
-// Compact "Customer Details" card for the TK detail sidebar — phone,
-// email, default receiving address and a quick package count, fetched
-// straight from `customers` / `customer_addresses` by customer_id.
-function CustomerDetailsCard({ customerId }) {
-  const [info, setInfo] = useState(null); // null = loading, false = nothing to show
-
-  useEffect(() => {
-    let alive = true;
-    setInfo(null);
-    if (!supabase || !customerId) {
-      setInfo(false);
-      return;
-    }
-    (async () => {
-      const [{ data: cust }, { data: addrs }, { count }] = await Promise.all([
-        supabase
-          .from("customers")
-          .select("id, name, customer_code, phone, email")
-          .eq("id", customerId)
-          .maybeSingle(),
-        supabase
-          .from("customer_addresses")
-          .select("address, commune, district, province")
-          .eq("customer_id", customerId)
-          .order("is_default", { ascending: false })
-          .limit(1),
-        supabase
-          .from("packages")
-          .select("id", { count: "exact", head: true })
-          .eq("customer_id", customerId),
-      ]);
-      if (!alive) return;
-      setInfo(
-        cust
-          ? { ...cust, address: addrs?.[0] || null, pkgCount: count ?? 0 }
-          : false,
-      );
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [customerId]);
-
-  if (info === false) return null;
-
-  if (info === null) {
-    return (
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-        <div className="h-4 w-32 bg-mist-100 rounded animate-pulse mb-4" />
-        <div className="h-9 w-9 rounded-full bg-mist-100 animate-pulse mb-3" />
-        <div className="h-3 w-full bg-mist-100 rounded animate-pulse mb-2" />
-        <div className="h-3 w-2/3 bg-mist-100 rounded animate-pulse" />
-      </div>
-    );
-  }
-
-  const addrText = info.address
-    ? [
-        info.address.address,
-        info.address.commune,
-        info.address.district,
-        info.address.province,
-      ]
-        .filter(Boolean)
-        .join(", ")
-    : null;
-
-  return (
-    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-      <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-4">
-        <Icons.User size={16} className="text-ink-600/60" />
-        Customer Information
-      </h2>
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-12 h-12 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center text-base font-bold shrink-0">
-          {(info.name || "?").slice(0, 1).toUpperCase()}
-        </div>
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-ink-900 truncate">
-            {info.name || "—"}
-          </div>
-          <div className="text-xs text-ink-600/50">
-            {info.customer_code || "—"}
-          </div>
-        </div>
-        <span className="ml-auto shrink-0 bg-mist-100 text-ink-700 text-[11px] font-medium px-2 py-1 rounded-md whitespace-nowrap">
-          {info.pkgCount} packages
-        </span>
-      </div>
-      <div className="space-y-2">
-        {info.phone && (
-          <div className="flex items-center gap-2 text-sm text-ink-700">
-            <Icons.Phone size={14} className="text-ink-600/40 shrink-0" />
-            {info.phone}
-          </div>
-        )}
-        {info.email && (
-          <div className="flex items-center gap-2 text-sm text-ink-700">
-            <Icons.Mail size={14} className="text-ink-600/40 shrink-0" />
-            <span className="truncate">{info.email}</span>
-          </div>
-        )}
-        {addrText && (
-          <div className="flex items-start gap-2 text-sm text-ink-700">
-            <Icons.MapPin
-              size={14}
-              className="text-ink-600/40 shrink-0 mt-0.5"
+      {canOverride && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+          <label className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+            <input
+              type="checkbox"
+              checked={override.on}
+              onChange={(e) =>
+                setOverride((o) => ({ ...o, on: e.target.checked }))
+              }
+              className="h-4 w-4 accent-blue-600"
+            />{" "}
+            Allow freight override
+          </label>
+          {override.on && (
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={override.value}
+              onChange={(e) =>
+                setOverride((o) => ({ ...o, value: e.target.value }))
+              }
+              className={`${INPUT_CLS} mt-3`}
+              placeholder="Override freight"
             />
-            <span>{addrText}</span>
-          </div>
-        )}
-        {!info.phone && !info.email && !addrText && (
-          <div className="text-xs text-ink-600/40">
-            មិនទាន់មានព័ត៌មានទំនាក់ទំនងទេ
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function PhotoGallery({ tk }) {
-  const [photos, setPhotos] = useState(null);
-  const [photoNote, setPhotoNote] = useState({ error: "", syncError: "" });
-  const [activeIdx, setActiveIdx] = useState(null);
-
-  useEffect(() => {
-    let alive = true;
-    setPhotos(null);
-    setPhotoNote({ error: "", syncError: "" });
-    loadPhotosDetailed(tk)
-      .then((r) => {
-        if (!alive) return;
-        setPhotos(r.photos);
-        setPhotoNote({ error: r.error, syncError: r.syncError });
-      })
-      .catch((err) => {
-        if (!alive) return;
-        setPhotos([]);
-        setPhotoNote({ error: err?.message || "Load failed", syncError: "" });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [tk]);
-
-  const active = activeIdx != null && photos ? photos[activeIdx] : null;
-
-  return (
-    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
-          <Icons.Image size={16} className="text-ink-600/60" />
-          Product Images
-        </h2>
-        {photos && (
-          <span className="bg-mist-100 text-ink-700 text-xs font-medium px-2 py-1 rounded-md">
-            {photos.length} រូប
-          </span>
-        )}
-      </div>
-      {photoNote.syncError && (
-        <p className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-          រូបភាពនេះមានតែក្នុង browser នេះ — Upload ទៅ Supabase មិនបានទេ (Staff
-          នឹងមិនឃើញ): {photoNote.syncError}។ សូមពិនិត្យ Storage bucket
-          "cargo-photos" និង policy លើ cargo_photos។
-        </p>
-      )}
-      {photos === null ? (
-        <SkeletonPhotoGrid count={3} />
-      ) : photos.length === 0 ? (
-        <div className="py-8 flex flex-col items-center text-center">
-          <Icons.ImageOff size={30} className="text-ink-600/20 mb-2" />
-          <p className="text-sm text-ink-600/45">TK នេះNo images yetទេ</p>
-          {photoNote.error && (
-            <p className="mt-2 text-xs text-red-600 max-w-xs">
-              មិនអាចអានរូបភាពពី Supabase បានទេ: {photoNote.error}
-            </p>
           )}
         </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-3">
-          {photos.map((p, i) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => setActiveIdx(i)}
-              className="text-left border border-mist-200 rounded-md overflow-hidden hover:border-signal-blue"
-            >
-              <img
-                src={p.dataUrl}
-                alt={p.category}
-                className="w-full aspect-square object-cover"
-              />
-              <div className="px-2 py-1 text-[10px] text-ink-700 bg-mist-50 truncate">
-                {p.category}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {active && (
-        <div
-          className="fixed inset-0 bg-ink-900/80 z-50 flex items-center justify-center p-4"
-          onClick={() => setActiveIdx(null)}
-        >
-          <div
-            className="bg-white rounded-md shadow-lg max-w-3xl w-full max-h-[92vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-mist-200">
-              <div className="text-sm font-medium text-ink-900">
-                {active.category}
-                <span className="text-ink-600/45 font-normal">
-                  {" "}
-                  — {activeIdx + 1} / {photos.length}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveIdx(null)}
-                className="text-ink-600/40 hover:text-ink-900"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 bg-ink-900/5 flex items-center justify-center">
-              <img
-                src={active.dataUrl}
-                alt={active.category}
-                className="max-h-[72vh] max-w-full object-contain"
-              />
-            </div>
-            <div className="flex items-center justify-between px-4 py-3 border-t border-mist-200">
-              <button
-                type="button"
-                disabled={activeIdx === 0}
-                onClick={() => setActiveIdx((i) => i - 1)}
-                className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <button
-                type="button"
-                disabled={activeIdx >= photos.length - 1}
-                onClick={() => setActiveIdx((i) => i + 1)}
-                className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
 }
 
-// ------------------------------------------------------------
-// components/StatusHistoryCard.jsx
-// ------------------------------------------------------------
-// Append-only log (Status / Date-Time / User / Remark). Stages reached
-// before this log existed are filled in from the tracking timeline so
-// older TKs still show something. China Warehouse / Admin can also move
-// the Inbound Status (Pending → ... → Ready for Shipment) from here.
-function StatusHistoryCard({ pkg, timeline }) {
-  const { getHistory, updateInboundStatus } = usePackageTracking();
-  const { user } = useAuth();
-  const [status, setStatus] = useState("");
-  const [remark, setRemark] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const logged = getHistory(pkg.tk);
-  const loggedStatuses = new Set(logged.map((h) => h.status));
-  const fromTimeline = timeline
-    .filter(
-      (s) => s.state !== "pending" && s.time && !loggedStatuses.has(s.label),
-    )
-    .map((s) => ({
-      status: s.label,
-      time: s.time,
-      user: s.proceedBy || "System Automation",
-      remark: "",
-    }));
-  const rows = [
-    ...fromTimeline,
-    ...logged.map((h) => ({
-      status: h.status,
-      time: formatIso(h.at),
-      user: h.user,
-      remark: h.remark,
-    })),
-  ].reverse();
-
-  const canUpdate =
-    hasPermission(user, "tk.manage_inbound") &&
-    pkg.inbound_status &&
-    pkg.status === "Inbound Origin";
-
-  async function handleUpdate() {
-    setError("");
-    if (!status) return setError("សូមជ្រើសរើស Status");
-    setBusy(true);
-    try {
-      await updateInboundStatus(pkg.tk, status, user?.name || "Admin", remark);
-      setStatus("");
-      setRemark("");
-    } catch (err) {
-      setError(err.message || "Unable to update.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
+function cargoPolicyFor(type, shipping) {
   return (
-    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="font-display font-bold text-sm text-ink-900">
-          Status History
-        </h2>
-        {pkg.inbound_status && (
-          <span className="flex items-center gap-1.5 text-xs text-ink-600/55">
-            Inbound Status <StatusBadge label={pkg.inbound_status} />
-          </span>
-        )}
-      </div>
-
-      {canUpdate && (
-        <div className="border border-mist-200 rounded-md p-3 mb-4 bg-mist-50/60 space-y-2">
-          {error && <p className="text-xs text-signal-red">{error}</p>}
-          <div className="flex flex-wrap gap-2">
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className={`${INPUT_CLS} sm:max-w-[200px]`}
-            >
-              <option value="">Update Inbound Status...</option>
-              {INBOUND_STATUSES.filter((s) => s !== pkg.inbound_status).map(
-                (s) => (
-                  <option key={s}>{s}</option>
-                ),
-              )}
-            </select>
-            <input
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-              placeholder="Remark (ចាំបាច់សម្រាប់ Exception)"
-              className={`${INPUT_CLS} flex-1 min-w-[160px]`}
-            />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleUpdate}
-              className="bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-            >
-              {busy ? "កំពុង Update..." : "Update"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {rows.length === 0 ? (
-        <p className="text-sm text-ink-600/45">No history yet.</p>
-      ) : (
-        <ol className="divide-y divide-mist-100">
-          {rows.map((r, i) => (
-            <li
-              key={i}
-              className="py-2.5 flex flex-wrap items-start gap-x-3 gap-y-1"
-            >
-              <StatusBadge label={r.status} />
-              <div className="min-w-0">
-                <div className="text-xs text-ink-600/55">
-                  {r.time} · {r.user}
-                </div>
-                {r.remark && (
-                  <div className="text-sm text-ink-800 mt-0.5">{r.remark}</div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------
-// components/AdvancedTkFilters.jsx
-// ------------------------------------------------------------
-const EMPTY_ADV = {
-  inbound: "",
-  outbound: "",
-  cargo: "",
-  size: "",
-  warehouse: "",
-  from: "",
-  to: "",
-};
-
-function AdvancedTkFilters({ adv, setAdv, rows }) {
-  const warehouses = [...new Set(rows.map((r) => r.warehouse).filter(Boolean))];
-  const set = (key) => (e) => setAdv((a) => ({ ...a, [key]: e.target.value }));
-  const outboundOptions = ["Not Shipped", ...PACKAGE_STAGES.slice(1)];
-  return (
-    <div className="px-4 lg:px-5 py-3.5 border-b border-mist-200 bg-mist-50/50">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-        <div>
-          <label className={LABEL_CLS}>Inbound Status</label>
-          <select
-            value={adv.inbound}
-            onChange={set("inbound")}
-            className={INPUT_CLS}
-          >
-            <option value="">All</option>
-            {INBOUND_STATUSES.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Outbound Status</label>
-          <select
-            value={adv.outbound}
-            onChange={set("outbound")}
-            className={INPUT_CLS}
-          >
-            <option value="">All</option>
-            {outboundOptions.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Cargo Type</label>
-          <select
-            value={adv.cargo}
-            onChange={set("cargo")}
-            className={INPUT_CLS}
-          >
-            <option value="">All</option>
-            {CARGO_TYPES.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Size</label>
-          <select value={adv.size} onChange={set("size")} className={INPUT_CLS}>
-            <option value="">All</option>
-            {SIZE_CHOICES.map((s) => (
-              <option key={s} value={s}>
-                {s === "OVER" ? "> L (CBM)" : s}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={LABEL_CLS}>China Warehouse</label>
-          <select
-            value={adv.warehouse}
-            onChange={set("warehouse")}
-            className={INPUT_CLS}
-          >
-            <option value="">All</option>
-            {warehouses.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={LABEL_CLS}>ចាប់ពីថ្ងៃ</label>
-          <input
-            type="date"
-            value={adv.from}
-            onChange={set("from")}
-            className={INPUT_CLS}
-          />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>ដល់ថ្ងៃ</label>
-          <input
-            type="date"
-            value={adv.to}
-            onChange={set("to")}
-            className={INPUT_CLS}
-          />
-        </div>
-        <div className="flex items-end">
-          <button
-            type="button"
-            onClick={() => setAdv(EMPTY_ADV)}
-            className="w-full text-sm text-ink-700 border border-mist-200 bg-white px-3 py-2 rounded-md hover:bg-mist-50"
-          >
-            Clear filters
-          </button>
-        </div>
-      </div>
-    </div>
+    (shipping?.cargoPolicies || DEFAULT_CARGO_POLICIES)[type] ||
+    DEFAULT_CARGO_POLICIES[type]
   );
 }
 
@@ -5121,6 +5045,7 @@ function blankInboundForm(user) {
     // លំនាំដើម = Ready for Shipment ដើម្បីកុំចាំបាច់ប្តូរច្រើនដង (ប្តូរបាននៅពេលចាំបាច់)
     inboundStatus: "Ready for Shipment",
     cargoType: "",
+    packageType: "small_package",
     sizeClass: "",
     length: "",
     width: "",
@@ -5229,13 +5154,16 @@ function CreatePackageModal({ open, onClose, onCreated }) {
     if (routeProblem) return setError(routeProblem);
     if (photos.length === 0)
       return setError("ត្រូវការរូបភាពទំនិញ យ៉ាងតិច ១ សន្លឹក");
-    if (!f.cargoType) return setError("សូមជ្រើសរើស Cargo Type");
-    if (!f.sizeClass) return setError("សូមជ្រើសរើស Size (S / M / L ឬ > L)");
-    const dimsEntered = [f.length, f.width, f.height].some(
-      (v) => String(v).trim() !== "",
-    );
-    if ((dimsEntered || f.sizeClass === "OVER") && calc.cbm == null)
-      return setError("Length, Width, Height ត្រូវតែជាលេខវិជ្ជមាន");
+    if (!f.cargoType) return setError("Please select Cargo Type");
+    if (!f.packageType) return setError("Please select Package Type");
+    if (
+      f.packageType === "small_package" &&
+      !["S", "M", "L"].includes(f.sizeClass)
+    )
+      return setError("Please select Size S, M or L");
+    if (f.packageType === "dimension_based" && calc.cbm == null)
+      return setError("Length, Width and Height must be positive numbers");
+    const dimsEntered = f.packageType === "dimension_based";
     if (f.weight !== "" && !(Number(f.weight) > 0))
       return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
     if (
@@ -5269,6 +5197,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
         customer: `${f.customer.customer_code} · ${f.customer.name}`,
         product_name: f.product.trim(),
         cargo_type: f.cargoType,
+        package_type: f.packageType,
         size_class: f.sizeClass,
         length_cm: dimsEntered ? Number(f.length) : null,
         width_cm: dimsEntered ? Number(f.width) : null,
@@ -5309,6 +5238,11 @@ function CreatePackageModal({ open, onClose, onCreated }) {
       syncTimelineToStatus(tkTrim, "Inbound Origin", userName, "Inbound saved");
       logStatus(tkTrim, f.inboundStatus, userName, "Inbound saved");
       onCreated?.(saved);
+      emitCBToast(
+        "ok",
+        "TK created successfully",
+        `${tkTrim} has been created and added to Packages / TK.`,
+      );
       setDone({ saved, photoWarning, order: newOrder });
     } catch (err) {
       // TK not saved → don't leave an empty Order behind.
@@ -6170,6 +6104,9 @@ function VerifyScanModal({
         height: p?.height_cm ?? "",
         weight: p?.weight_kg ?? "",
         cargoType: p?.cargo_type || "",
+        packageType:
+          p?.package_type ||
+          (p?.size_class === "OVER" ? "dimension_based" : "small_package"),
         sizeClass: p?.size_class || "",
         reason: "",
       });
@@ -6187,10 +6124,12 @@ function VerifyScanModal({
   const calc = edit
     ? calcFreight({
         cargoType: dims.cargoType,
+        packageType: dims.packageType,
         sizeClass: dims.sizeClass,
         length: dims.length,
         width: dims.width,
         height: dims.height,
+        weight: dims.weight,
       })
     : null;
 
@@ -6199,7 +6138,14 @@ function VerifyScanModal({
     const userName = user?.name || "Admin";
     if (edit) {
       if (!(Number(dims.weight) > 0))
-        return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
+        return setError("Weight must be a positive number");
+      if (
+        dims.packageType === "small_package" &&
+        !["S", "M", "L"].includes(dims.sizeClass)
+      )
+        return setError("Please select Size S, M or L");
+      if (dims.packageType === "dimension_based" && calc.cbm == null)
+        return setError("Length, Width and Height must be positive numbers");
       if (!calc.ok) return setError(calc.message);
       if (!String(dims.reason).trim())
         return setError("សូមបញ្ចូលReason for adjustment (Reason)");
@@ -6207,9 +6153,7 @@ function VerifyScanModal({
     setSaving(true);
     try {
       if (edit) {
-        const dimsEntered = [dims.length, dims.width, dims.height].some(
-          (v) => String(v).trim() !== "",
-        );
+        const dimsEntered = dims.packageType === "dimension_based";
         // A fee the Super Admin overrode by hand is never silently
         // replaced by the automatic calculation.
         const keepFee = pkg.freight_overridden;
@@ -6223,7 +6167,9 @@ function VerifyScanModal({
           weight: `${Number(dims.weight)} KG`,
           cbm: calc.cbm != null ? calc.cbm.toFixed(3) : "",
           cargo_type: dims.cargoType,
-          size_class: dims.sizeClass,
+          package_type: dims.packageType,
+          size_class:
+            dims.packageType === "dimension_based" ? "OVER" : dims.sizeClass,
           pricing_method: calc.method,
           rate: calc.rate,
           freight_fee: newFee,
@@ -6424,28 +6370,101 @@ function VerifyScanModal({
                     {sizeLabel(pkg.size_class)} · Fee{" "}
                     {pkg.freight_fee != null ? money(pkg.freight_fee) : "—"}
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {[
-                      ["length", "Length (cm)"],
-                      ["width", "Width (cm)"],
-                      ["height", "Height (cm)"],
-                      ["weight", "Weight (KG)"],
-                    ].map(([key, label]) => (
-                      <div key={key}>
-                        <label className={LABEL_CLS}>{label}</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={dims[key]}
-                          onChange={(e) =>
-                            setDims((d) => ({ ...d, [key]: e.target.value }))
-                          }
-                          className={INPUT_CLS}
-                        />
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className={LABEL_CLS}>Package Type</label>
+                      <select
+                        value={
+                          dims.packageType ||
+                          (dims.sizeClass === "OVER"
+                            ? "dimension_based"
+                            : "small_package")
+                        }
+                        onChange={(e) =>
+                          setDims((d) => ({
+                            ...d,
+                            packageType: e.target.value,
+                            sizeClass:
+                              e.target.value === "dimension_based"
+                                ? "OVER"
+                                : d.sizeClass === "OVER"
+                                  ? ""
+                                  : d.sizeClass,
+                            length:
+                              e.target.value === "dimension_based"
+                                ? d.length
+                                : "",
+                            width:
+                              e.target.value === "dimension_based"
+                                ? d.width
+                                : "",
+                            height:
+                              e.target.value === "dimension_based"
+                                ? d.height
+                                : "",
+                          }))
+                        }
+                        className={INPUT_CLS}
+                      >
+                        <option value="small_package">Small Package</option>
+                        <option value="dimension_based">Dimension Based</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={LABEL_CLS}>Weight (KG)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={dims.weight}
+                        onChange={(e) =>
+                          setDims((d) => ({ ...d, weight: e.target.value }))
+                        }
+                        className={INPUT_CLS}
+                      />
+                    </div>
                   </div>
+                  {dims.packageType === "dimension_based" ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {[
+                        ["length", "Length (cm)"],
+                        ["width", "Width (cm)"],
+                        ["height", "Height (cm)"],
+                      ].map(([key, label]) => (
+                        <div key={key}>
+                          <label className={LABEL_CLS}>{label} *</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={dims[key]}
+                            onChange={(e) =>
+                              setDims((d) => ({ ...d, [key]: e.target.value }))
+                            }
+                            className={INPUT_CLS}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div>
+                      <label className={LABEL_CLS}>Package Size</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {["S", "M", "L"].map((z) => (
+                          <button
+                            type="button"
+                            key={z}
+                            onClick={() =>
+                              setDims((d) => ({ ...d, sizeClass: z }))
+                            }
+                            className={segBtn(dims.sizeClass === z)}
+                          >
+                            Size {z}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={LABEL_CLS}>Cargo Type</label>
@@ -9347,6 +9366,9 @@ function Icon({ name, ...props }) {
 
 function Sidebar({ open, onClose }) {
   const { user } = useAuth();
+  const systemSettings = useSystemSettings();
+  const company = systemSettings.company || DEFAULT_SYSTEM_SETTINGS.company;
+  const sidebarLogo = company.logoUrl || company.logoDataUrl || "";
   return (
     <>
       {/* mobile overlay */}
@@ -9362,15 +9384,25 @@ function Sidebar({ open, onClose }) {
           ${open ? "translate-x-0" : "-translate-x-full"}`}
       >
         <div className="h-16 flex items-center gap-2 px-5 border-b border-white/10 shrink-0">
-          <div className="w-8 h-8 rounded-sm bg-signal-blue flex items-center justify-center">
-            <Icons.Waypoints size={18} className="text-white" />
+          <div className="w-8 h-8 rounded-sm bg-signal-blue flex items-center justify-center overflow-hidden">
+            {sidebarLogo ? (
+              <img
+                src={sidebarLogo}
+                alt="Company logo"
+                className="w-full h-full object-contain bg-white"
+              />
+            ) : (
+              <Icons.Waypoints size={18} className="text-white" />
+            )}
           </div>
-          <div className="leading-tight">
-            <div className="font-display font-extrabold text-white text-sm tracking-tight">
-              Cargo Bridge
+          <div className="leading-tight min-w-0">
+            <div className="font-display font-extrabold text-white text-sm tracking-tight truncate">
+              {company.name || "Cargo Bridge"}
             </div>
-            <div className="text-[11px] text-mist-100/50">
-              CN → KH Logistics
+            <div className="text-[11px] text-mist-100/50 truncate">
+              {company.shortName
+                ? `${company.shortName} · Logistics`
+                : "CN → KH Logistics"}
             </div>
           </div>
         </div>
@@ -11545,6 +11577,251 @@ function computeListStat(metric, { packages, stageRows, rows }) {
   }
 }
 
+// ------------------------------------------------------------
+// components/StatusHistoryCard.jsx
+// ------------------------------------------------------------
+// Append-only log (Status / Date-Time / User / Remark). Stages reached
+// before this log existed are filled in from the tracking timeline so
+// older TKs still show something. China Warehouse / Admin can also move
+// the Inbound Status (Pending → ... → Ready for Shipment) from here.
+function StatusHistoryCard({ pkg, timeline }) {
+  const { getHistory, updateInboundStatus } = usePackageTracking();
+  const { user } = useAuth();
+  const [status, setStatus] = useState("");
+  const [remark, setRemark] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const logged = getHistory(pkg.tk);
+  const loggedStatuses = new Set(logged.map((h) => h.status));
+  const fromTimeline = timeline
+    .filter(
+      (s) => s.state !== "pending" && s.time && !loggedStatuses.has(s.label),
+    )
+    .map((s) => ({
+      status: s.label,
+      time: s.time,
+      user: s.proceedBy || "System Automation",
+      remark: "",
+    }));
+  const rows = [
+    ...fromTimeline,
+    ...logged.map((h) => ({
+      status: h.status,
+      time: formatIso(h.at),
+      user: h.user,
+      remark: h.remark,
+    })),
+  ].reverse();
+
+  const canUpdate =
+    hasPermission(user, "tk.manage_inbound") &&
+    pkg.inbound_status &&
+    pkg.status === "Inbound Origin";
+
+  async function handleUpdate() {
+    setError("");
+    if (!status) return setError("សូមជ្រើសរើស Status");
+    setBusy(true);
+    try {
+      await updateInboundStatus(pkg.tk, status, user?.name || "Admin", remark);
+      setStatus("");
+      setRemark("");
+    } catch (err) {
+      setError(err.message || "Unable to update.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-display font-bold text-sm text-ink-900">
+          Status History
+        </h2>
+        {pkg.inbound_status && (
+          <span className="flex items-center gap-1.5 text-xs text-ink-600/55">
+            Inbound Status <StatusBadge label={pkg.inbound_status} />
+          </span>
+        )}
+      </div>
+
+      {canUpdate && (
+        <div className="border border-mist-200 rounded-md p-3 mb-4 bg-mist-50/60 space-y-2">
+          {error && <p className="text-xs text-signal-red">{error}</p>}
+          <div className="flex flex-wrap gap-2">
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className={`${INPUT_CLS} sm:max-w-[200px]`}
+            >
+              <option value="">Update Inbound Status...</option>
+              {INBOUND_STATUSES.filter((s) => s !== pkg.inbound_status).map(
+                (s) => (
+                  <option key={s}>{s}</option>
+                ),
+              )}
+            </select>
+            <input
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+              placeholder="Remark (ចាំបាច់សម្រាប់ Exception)"
+              className={`${INPUT_CLS} flex-1 min-w-[160px]`}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleUpdate}
+              className="bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
+            >
+              {busy ? "កំពុង Update..." : "Update"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <p className="text-sm text-ink-600/45">No history yet.</p>
+      ) : (
+        <ol className="divide-y divide-mist-100">
+          {rows.map((r, i) => (
+            <li
+              key={i}
+              className="py-2.5 flex flex-wrap items-start gap-x-3 gap-y-1"
+            >
+              <StatusBadge label={r.status} />
+              <div className="min-w-0">
+                <div className="text-xs text-ink-600/55">
+                  {r.time} · {r.user}
+                </div>
+                {r.remark && (
+                  <div className="text-sm text-ink-800 mt-0.5">{r.remark}</div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// components/AdvancedTkFilters.jsx
+// ------------------------------------------------------------
+const EMPTY_ADV = {
+  inbound: "",
+  outbound: "",
+  cargo: "",
+  size: "",
+  warehouse: "",
+  from: "",
+  to: "",
+};
+
+function AdvancedTkFilters({ adv, setAdv, rows }) {
+  const warehouses = [...new Set(rows.map((r) => r.warehouse).filter(Boolean))];
+  const set = (key) => (e) => setAdv((a) => ({ ...a, [key]: e.target.value }));
+  const outboundOptions = ["Not Shipped", ...PACKAGE_STAGES.slice(1)];
+  return (
+    <div className="px-4 lg:px-5 py-3.5 border-b border-mist-200 bg-mist-50/50">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div>
+          <label className={LABEL_CLS}>Inbound Status</label>
+          <select
+            value={adv.inbound}
+            onChange={set("inbound")}
+            className={INPUT_CLS}
+          >
+            <option value="">All</option>
+            {INBOUND_STATUSES.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Outbound Status</label>
+          <select
+            value={adv.outbound}
+            onChange={set("outbound")}
+            className={INPUT_CLS}
+          >
+            <option value="">All</option>
+            {outboundOptions.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Cargo Type</label>
+          <select
+            value={adv.cargo}
+            onChange={set("cargo")}
+            className={INPUT_CLS}
+          >
+            <option value="">All</option>
+            {CARGO_TYPES.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Size</label>
+          <select value={adv.size} onChange={set("size")} className={INPUT_CLS}>
+            <option value="">All</option>
+            {SIZE_CHOICES.map((s) => (
+              <option key={s} value={s}>
+                {s === "OVER" ? "> L (CBM)" : s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>China Warehouse</label>
+          <select
+            value={adv.warehouse}
+            onChange={set("warehouse")}
+            className={INPUT_CLS}
+          >
+            <option value="">All</option>
+            {warehouses.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>ចាប់ពីថ្ងៃ</label>
+          <input
+            type="date"
+            value={adv.from}
+            onChange={set("from")}
+            className={INPUT_CLS}
+          />
+        </div>
+        <div>
+          <label className={LABEL_CLS}>ដល់ថ្ងៃ</label>
+          <input
+            type="date"
+            value={adv.to}
+            onChange={set("to")}
+            className={INPUT_CLS}
+          />
+        </div>
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={() => setAdv(EMPTY_ADV)}
+            className="w-full text-sm text-ink-700 border border-mist-200 bg-white px-3 py-2 rounded-md hover:bg-mist-50"
+          >
+            Clear filters
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ListPage({
   title,
   subtitle,
@@ -12411,7 +12688,7 @@ function Login() {
               <Waypoints size={27} className="text-white" />
             </div>
             <div className="font-display text-xl font-extrabold tracking-tight text-ink-900">
-              Cargo Bridge
+              {loginCompany.name || "Cargo Bridge"}
             </div>
             <h2 className="mt-5 font-display text-[26px] font-bold leading-tight text-ink-900">
               Sign in
@@ -12511,7 +12788,7 @@ function Login() {
         </div>
 
         <div className="mt-5 text-center text-[11px] text-ink-600/40">
-          © 2026 Cargo Bridge Logistics
+          © 2026 {loginCompany.name || "Cargo Bridge"} Logistics
         </div>
       </div>
     </div>
@@ -13562,6 +13839,9 @@ function EditPackageModal({ open, pkg, onClose }) {
       order_no: pkg.order_no || pkg.order || "",
       product_name: pkg.product_name || "",
       cargo_type: pkg.cargo_type || "Normal",
+      package_type:
+        pkg.package_type ||
+        (pkg.size_class === "OVER" ? "dimension_based" : "small_package"),
       size_class: pkg.size_class || "",
       weight: pkg.weight_kg ?? String(pkg.weight || "").replace(/[^\d.]/g, ""),
       length: pkg.length_cm ?? "",
@@ -13580,19 +13860,31 @@ function EditPackageModal({ open, pkg, onClose }) {
     if (!hasPermission(user, "tk.edit")) return;
     setError("");
     if (f.weight !== "" && !(Number(f.weight) > 0))
-      return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
+      return setError("Weight must be a positive number");
+    if (
+      f.package_type === "small_package" &&
+      !["S", "M", "L"].includes(f.size_class)
+    )
+      return setError("Please select Size S, M or L");
+    if (
+      f.package_type === "dimension_based" &&
+      computeCbm(f.length, f.width, f.height) == null
+    )
+      return setError("Length, Width and Height must be positive numbers");
     if (!String(f.reason).trim())
       return setError("សូមបញ្ចូលReason for adjustment (Reason)");
-    const dimsEntered = [f.length, f.width, f.height].some(
-      (v) => String(v).trim() !== "",
-    );
+    const dimsEntered = f.package_type === "dimension_based";
     const cbm = computeCbm(f.length, f.width, f.height);
     const patch = {
       tk: pkg.tk,
       order_no: f.order_no || null,
       product_name: f.product_name || null,
       cargo_type: f.cargo_type || null,
-      size_class: f.size_class || null,
+      package_type:
+        f.package_type ||
+        (f.size_class === "OVER" ? "dimension_based" : "small_package"),
+      size_class:
+        f.package_type === "dimension_based" ? "OVER" : f.size_class || null,
       length_cm: dimsEntered ? Number(f.length) : null,
       width_cm: dimsEntered ? Number(f.width) : null,
       height_cm: dimsEntered ? Number(f.height) : null,
@@ -13613,10 +13905,12 @@ function EditPackageModal({ open, pkg, onClose }) {
     };
     const calc = calcFreight({
       cargoType: f.cargo_type,
+      packageType: f.package_type,
       sizeClass: f.size_class,
       length: f.length,
       width: f.width,
       height: f.height,
+      weight: f.weight,
     });
     if (calc.ok && !pkg.freight_overridden) {
       patch.pricing_method = calc.method;
@@ -13631,6 +13925,11 @@ function EditPackageModal({ open, pkg, onClose }) {
         pkg.status || "Edited",
         user?.name || "Super Admin",
         `Super Admin edit · Reason: ${String(f.reason).trim()}`,
+      );
+      emitCBToast(
+        "ok",
+        "TK updated successfully",
+        `${pkg.tk} has been updated successfully.`,
       );
       onClose();
     } catch (err) {
@@ -13694,21 +13993,60 @@ function EditPackageModal({ open, pkg, onClose }) {
               </select>
             </div>
             <div>
-              <label className={LABEL_CLS}>Size</label>
+              <label className={LABEL_CLS}>Package Type</label>
               <select
                 className={INPUT_CLS}
-                value={f.size_class ?? ""}
-                onChange={set("size_class")}
+                value={
+                  f.package_type ??
+                  (f.size_class === "OVER"
+                    ? "dimension_based"
+                    : "small_package")
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setF((x) => ({
+                    ...x,
+                    package_type: v,
+                    size_class:
+                      v === "dimension_based"
+                        ? "OVER"
+                        : x.size_class === "OVER"
+                          ? ""
+                          : x.size_class,
+                    length: v === "dimension_based" ? x.length : "",
+                    width: v === "dimension_based" ? x.width : "",
+                    height: v === "dimension_based" ? x.height : "",
+                  }));
+                }}
               >
-                <option value="">—</option>
-                {SIZE_CHOICES.map((c) => (
-                  <option key={c} value={c}>
-                    {sizeLabel(c)}
-                  </option>
-                ))}
+                <option value="small_package">Small Package</option>
+                <option value="dimension_based">Dimension Based</option>
               </select>
             </div>
-            <div className="col-span-2">
+            <div>
+              <label className={LABEL_CLS}>Package Size</label>
+              {f.package_type === "dimension_based" ? (
+                <div
+                  className={`${INPUT_CLS} bg-slate-50 text-slate-500 flex items-center`}
+                >
+                  Dimension Based (&gt; L)
+                </div>
+              ) : (
+                <select
+                  className={INPUT_CLS}
+                  value={f.size_class ?? ""}
+                  onChange={set("size_class")}
+                >
+                  <option value="">—</option>
+                  {["S", "M", "L"].map((c) => (
+                    <option key={c} value={c}>
+                      Size {c}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div>
               <label className={LABEL_CLS}>Weight (KG)</label>
               <input
                 className={INPUT_CLS}
@@ -13729,22 +14067,24 @@ function EditPackageModal({ open, pkg, onClose }) {
                 onChange={set("package_count")}
               />
             </div>
-            {[
-              ["length", "Length (cm)"],
-              ["width", "Width (cm)"],
-              ["height", "Height (cm)"],
-            ].map(([k, label]) => (
-              <div key={k}>
-                <label className={LABEL_CLS}>{label}</label>
-                <input
-                  className={INPUT_CLS}
-                  type="number"
-                  step="any"
-                  value={f[k] ?? ""}
-                  onChange={set(k)}
-                />
-              </div>
-            ))}
+            {f.package_type === "dimension_based" &&
+              [
+                ["length", "Length (cm)"],
+                ["width", "Width (cm)"],
+                ["height", "Height (cm)"],
+              ].map(([k, label]) => (
+                <div key={k}>
+                  <label className={LABEL_CLS}>{label} *</label>
+                  <input
+                    className={INPUT_CLS}
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={f[k] ?? ""}
+                    onChange={set(k)}
+                  />
+                </div>
+              ))}
           </div>
           <div>
             <label className={LABEL_CLS}>Reason *</label>
@@ -13806,6 +14146,11 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
     setError("");
     try {
       await deletePackage(tk);
+      emitCBToast(
+        "ok",
+        "TK deleted successfully",
+        `${tk} has been permanently removed.`,
+      );
       onDeleted();
     } catch (err) {
       setError(err.message || "Unable to delete.");
@@ -14032,18 +14377,18 @@ const LABEL_CSS = `
   .ft{margin-top:1.4mm;padding-top:1mm;border-top:.3mm solid #c9d6f0;text-align:center;font-size:2.1mm;letter-spacing:.6mm;color:#5b6b8f;font-weight:700}
 `;
 
-function labelPageHtml(d, codes) {
+function labelPageHtml(d, codes, brand = {}) {
   const e = htmlEsc;
   return `<div class="page">
   <div class="hd">
-    <div class="brand"><div class="logo">${LABEL_LOGO}</div>
-      <div><div class="bn">CARGO BRIDGE</div><div class="bs">LOGISTICS &amp; FORWARDING</div></div></div>
+    <div class="brand">${brand.showLogo !== false ? `<div class="logo">${brand.logoHtml || LABEL_LOGO}</div>` : ""}
+      ${brand.showCompanyName !== false ? `<div><div class="bn">${e(brand.name || "Cargo Bridge")}</div><div class="bs">${e(brand.subtitle || "CN → KH Logistics")}</div>${brand.showPhone && brand.phone ? `<div class="sub">${e(brand.phone)}</div>` : ""}${brand.showEmail && brand.email ? `<div class="sub">${e(brand.email)}</div>` : ""}${brand.showAddress && brand.address ? `<div class="sub">${e(brand.address)}</div>` : ""}</div>` : ""}</div>
     <div class="pill">PACKAGE LABEL</div>
   </div>
   <div class="top">
     <div class="lf">
       <div><div class="cap">ID:</div><div class="uid">${e(d.customerId)}</div></div>
-      <div><div class="bar">${codes.barcode}</div><div class="tk">TK: ${e(d.tk)}</div></div>
+      <div>${brand.showBarcode !== false ? `<div class="bar">${codes.barcode}</div>` : ""}<div class="tk">TK: ${e(d.tk)}</div></div>
     </div>
     <div class="rt">
       <div><div class="cap">Order Date</div><div class="v">${e(d.orderDate)}</div><div class="sub">${e(d.orderNo)}</div></div>
@@ -14055,12 +14400,12 @@ function labelPageHtml(d, codes) {
     <div class="st"><div class="cap">Package</div><div class="big">${e(d.pkgCount)}</div><div class="sub">Total Package</div></div>
     <div class="st"><div class="cap">Weight</div><div class="big">${e(d.weight)}</div><div class="sub">Gross Weight</div></div>
     <div class="st"><div class="cap">CBM</div><div class="big">${e(d.cbm)}</div><div class="sub">Volume</div></div>
-    <div class="qr">${codes.qr}<div class="cap">Scan for Tracking</div></div>
+    ${brand.showQr !== false ? `<div class="qr">${codes.qr}<div class="cap">Scan for Tracking</div></div>` : ""}
   </div>
   <div class="bt">
-    <div><div class="cap">Freight</div><div class="big v" style="font-size:4mm">${e(d.price)}</div><div class="sub">Total Freight</div></div>
+    ${brand.showFreight !== false ? `<div><div class="cap">Freight</div><div class="big v" style="font-size:4mm">${e(d.price)}</div><div class="sub">Total Freight</div></div>` : ""}
     <div><div class="cap">Route</div><div class="v" style="white-space:nowrap;font-size:2.9mm">${e(d.origin)} → ${e(d.branchCode)}</div><div class="sub">China → Cambodia</div></div>
-    <div><div class="cap">Container</div><div class="v">${e(d.containerNo)}</div><div class="sub">${e(d.containerSub)}</div></div>
+    ${brand.showContainer !== false ? `<div><div class="cap">Container</div><div class="v">${e(d.containerNo)}</div><div class="sub">${e(d.containerSub)}</div></div>` : ""}
   </div>
   <div class="ft">TRACK &nbsp;•&nbsp; SHIP &nbsp;•&nbsp; DELIVER</div>
 </div>`;
@@ -14085,6 +14430,8 @@ function printHtmlHidden(html) {
 
 function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
   const { rows: whRows } = useWarehouses();
+  const systemSettings = useSystemSettings();
+
   const [phone, setPhone] = useState("—");
   const [orderDate, setOrderDate] = useState("—");
   const [idx, setIdx] = useState(0);
@@ -14179,8 +14526,33 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
   }
 
   const curIdx = Math.min(idx, total - 1);
+  const brand = {
+    name: systemSettings.company.name,
+    subtitle: systemSettings.company.shortName
+      ? `${systemSettings.company.shortName} · Logistics`
+      : "CN → KH Logistics",
+    showLogo: systemSettings.label.showLogo,
+    showCompanyName: systemSettings.label.showCompanyName,
+    showPhone: systemSettings.label.showPhone,
+    showEmail: systemSettings.label.showEmail,
+    showAddress: systemSettings.label.showAddress,
+    showBarcode: systemSettings.label.showBarcode,
+    showQr: systemSettings.label.showQr,
+    showFreight: systemSettings.label.showFreight,
+    showContainer: systemSettings.label.showContainer,
+    phone: systemSettings.company.phone,
+    email: systemSettings.company.email,
+    address: systemSettings.company.address,
+    logoHtml:
+      systemSettings.company.logoUrl || systemSettings.company.logoDataUrl
+        ? `<img src="${systemSettings.company.logoUrl || systemSettings.company.logoDataUrl}" style="width:100%;height:100%;object-fit:contain"/>`
+        : LABEL_LOGO,
+  };
   const previewHtml = codes
-    ? labelDocHtml(labelPageHtml(dataFor(cur, curIdx, cont), codes), cur.tk)
+    ? labelDocHtml(
+        labelPageHtml(dataFor(cur, curIdx, cont), codes, brand),
+        cur.tk,
+      )
     : "";
 
   function printCurrent() {
@@ -14194,7 +14566,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
       ]);
       const pages = [];
       for (let i = 0; i < total; i++)
-        pages.push(labelPageHtml(dataFor(cur, i, c), k));
+        pages.push(labelPageHtml(dataFor(cur, i, c), k, brand));
       printHtmlHidden(labelDocHtml(pages.join(""), `Labels ${ono || ""}`));
     } catch {
       setErr("មិនអាច Print Allបានទេ");
@@ -14300,6 +14672,267 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// components/CustomerDetailsCard.jsx
+// ------------------------------------------------------------
+// Compact "Customer Details" card for the TK detail sidebar — phone,
+// email, default receiving address and a quick package count, fetched
+// straight from `customers` / `customer_addresses` by customer_id.
+function CustomerDetailsCard({ customerId }) {
+  const [info, setInfo] = useState(null); // null = loading, false = nothing to show
+
+  useEffect(() => {
+    let alive = true;
+    setInfo(null);
+    if (!supabase || !customerId) {
+      setInfo(false);
+      return;
+    }
+    (async () => {
+      const [{ data: cust }, { data: addrs }, { count }] = await Promise.all([
+        supabase
+          .from("customers")
+          .select("id, name, customer_code, phone, email")
+          .eq("id", customerId)
+          .maybeSingle(),
+        supabase
+          .from("customer_addresses")
+          .select("address, commune, district, province")
+          .eq("customer_id", customerId)
+          .order("is_default", { ascending: false })
+          .limit(1),
+        supabase
+          .from("packages")
+          .select("id", { count: "exact", head: true })
+          .eq("customer_id", customerId),
+      ]);
+      if (!alive) return;
+      setInfo(
+        cust
+          ? { ...cust, address: addrs?.[0] || null, pkgCount: count ?? 0 }
+          : false,
+      );
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [customerId]);
+
+  if (info === false) return null;
+
+  if (info === null) {
+    return (
+      <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+        <div className="h-4 w-32 bg-mist-100 rounded animate-pulse mb-4" />
+        <div className="h-9 w-9 rounded-full bg-mist-100 animate-pulse mb-3" />
+        <div className="h-3 w-full bg-mist-100 rounded animate-pulse mb-2" />
+        <div className="h-3 w-2/3 bg-mist-100 rounded animate-pulse" />
+      </div>
+    );
+  }
+
+  const addrText = info.address
+    ? [
+        info.address.address,
+        info.address.commune,
+        info.address.district,
+        info.address.province,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : null;
+
+  return (
+    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+      <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-4">
+        <Icons.User size={16} className="text-ink-600/60" />
+        Customer Information
+      </h2>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-12 h-12 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center text-base font-bold shrink-0">
+          {(info.name || "?").slice(0, 1).toUpperCase()}
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-900 truncate">
+            {info.name || "—"}
+          </div>
+          <div className="text-xs text-ink-600/50">
+            {info.customer_code || "—"}
+          </div>
+        </div>
+        <span className="ml-auto shrink-0 bg-mist-100 text-ink-700 text-[11px] font-medium px-2 py-1 rounded-md whitespace-nowrap">
+          {info.pkgCount} packages
+        </span>
+      </div>
+      <div className="space-y-2">
+        {info.phone && (
+          <div className="flex items-center gap-2 text-sm text-ink-700">
+            <Icons.Phone size={14} className="text-ink-600/40 shrink-0" />
+            {info.phone}
+          </div>
+        )}
+        {info.email && (
+          <div className="flex items-center gap-2 text-sm text-ink-700">
+            <Icons.Mail size={14} className="text-ink-600/40 shrink-0" />
+            <span className="truncate">{info.email}</span>
+          </div>
+        )}
+        {addrText && (
+          <div className="flex items-start gap-2 text-sm text-ink-700">
+            <Icons.MapPin
+              size={14}
+              className="text-ink-600/40 shrink-0 mt-0.5"
+            />
+            <span>{addrText}</span>
+          </div>
+        )}
+        {!info.phone && !info.email && !addrText && (
+          <div className="text-xs text-ink-600/40">
+            មិនទាន់មានព័ត៌មានទំនាក់ទំនងទេ
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PhotoGallery({ tk }) {
+  const [photos, setPhotos] = useState(null);
+  const [photoNote, setPhotoNote] = useState({ error: "", syncError: "" });
+  const [activeIdx, setActiveIdx] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    setPhotos(null);
+    setPhotoNote({ error: "", syncError: "" });
+    loadPhotosDetailed(tk)
+      .then((r) => {
+        if (!alive) return;
+        setPhotos(r.photos);
+        setPhotoNote({ error: r.error, syncError: r.syncError });
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setPhotos([]);
+        setPhotoNote({ error: err?.message || "Load failed", syncError: "" });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tk]);
+
+  const active = activeIdx != null && photos ? photos[activeIdx] : null;
+
+  return (
+    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
+          <Icons.Image size={16} className="text-ink-600/60" />
+          Product Images
+        </h2>
+        {photos && (
+          <span className="bg-mist-100 text-ink-700 text-xs font-medium px-2 py-1 rounded-md">
+            {photos.length} រូប
+          </span>
+        )}
+      </div>
+      {photoNote.syncError && (
+        <p className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+          រូបភាពនេះមានតែក្នុង browser នេះ — Upload ទៅ Supabase មិនបានទេ (Staff
+          នឹងមិនឃើញ): {photoNote.syncError}។ សូមពិនិត្យ Storage bucket
+          "cargo-photos" និង policy លើ cargo_photos។
+        </p>
+      )}
+      {photos === null ? (
+        <SkeletonPhotoGrid count={3} />
+      ) : photos.length === 0 ? (
+        <div className="py-8 flex flex-col items-center text-center">
+          <Icons.ImageOff size={30} className="text-ink-600/20 mb-2" />
+          <p className="text-sm text-ink-600/45">TK នេះNo images yetទេ</p>
+          {photoNote.error && (
+            <p className="mt-2 text-xs text-red-600 max-w-xs">
+              មិនអាចអានរូបភាពពី Supabase បានទេ: {photoNote.error}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {photos.map((p, i) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setActiveIdx(i)}
+              className="text-left border border-mist-200 rounded-md overflow-hidden hover:border-signal-blue"
+            >
+              <img
+                src={p.dataUrl}
+                alt={p.category}
+                className="w-full aspect-square object-cover"
+              />
+              <div className="px-2 py-1 text-[10px] text-ink-700 bg-mist-50 truncate">
+                {p.category}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {active && (
+        <div
+          className="fixed inset-0 bg-ink-900/80 z-50 flex items-center justify-center p-4"
+          onClick={() => setActiveIdx(null)}
+        >
+          <div
+            className="bg-white rounded-md shadow-lg max-w-3xl w-full max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-mist-200">
+              <div className="text-sm font-medium text-ink-900">
+                {active.category}
+                <span className="text-ink-600/45 font-normal">
+                  {" "}
+                  — {activeIdx + 1} / {photos.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveIdx(null)}
+                className="text-ink-600/40 hover:text-ink-900"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 bg-ink-900/5 flex items-center justify-center">
+              <img
+                src={active.dataUrl}
+                alt={active.category}
+                className="max-h-[72vh] max-w-full object-contain"
+              />
+            </div>
+            <div className="flex items-center justify-between px-4 py-3 border-t border-mist-200">
+              <button
+                type="button"
+                disabled={activeIdx === 0}
+                onClick={() => setActiveIdx((i) => i - 1)}
+                className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={activeIdx >= photos.length - 1}
+                onClick={() => setActiveIdx((i) => i + 1)}
+                className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -14464,6 +15097,11 @@ function PackageDetail() {
     // Container Number is always captured.
     if (currentStage === "Inbound Origin") return;
     advance(tk, user?.name || "Admin");
+    emitCBToast(
+      "ok",
+      "TK status updated",
+      `${tk} was moved to the next tracking stage.`,
+    );
   }
 
   // Unknown TK while the registry is still loading → skeleton, not "—" rows.
@@ -21591,10 +22229,19 @@ function RoleManagementPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null); // { type: ok | warn | err, text }
+  const [confirmAction, setConfirmAction] = useState(null);
 
   useEffect(() => {
     syncRolesFromServer();
   }, []);
+
+  // Role Management feedback appears as a floating toast and dismisses itself.
+  useEffect(() => {
+    if (!msg) return undefined;
+    const delay = msg.type === "err" ? 7000 : msg.type === "warn" ? 6000 : 4200;
+    const timeoutId = window.setTimeout(() => setMsg(null), delay);
+    return () => window.clearTimeout(timeoutId);
+  }, [msg]);
 
   const savedOf = (name) =>
     roles.find((r) => r.name === name)?.permissions ?? [];
@@ -21702,21 +22349,24 @@ function RoleManagementPage() {
 
   async function saveChanges() {
     setSaving(true);
-    const ok = await run(async () => {
-      requirePermission(
-        user,
-        "role.manage",
-        "មានតែ Super Admin ទេដែលអាចកែ Role",
-      );
-      const cur = loadRoles();
-      const next = cur.map((r) =>
-        r.name !== SUPER_ADMIN && draft[r.name]
-          ? normalizeRole({ ...r, permissions: draft[r.name] })
-          : r,
-      );
-      commitRoles(next); // takes effect for every user of the role right away
-      return persistRoles(next.filter((r) => dirtyNames.includes(r.name)));
-    }, `Saveសិទ្ធិរបស់ ${dirtyNames.length} Role រួចរាល់`);
+    const ok = await run(
+      async () => {
+        requirePermission(
+          user,
+          "role.manage",
+          "មានតែ Super Admin ទេដែលអាចកែ Role",
+        );
+        const cur = loadRoles();
+        const next = cur.map((r) =>
+          r.name !== SUPER_ADMIN && draft[r.name]
+            ? normalizeRole({ ...r, permissions: draft[r.name] })
+            : r,
+        );
+        commitRoles(next); // takes effect for every user of the role right away
+        return persistRoles(next.filter((r) => dirtyNames.includes(r.name)));
+      },
+      `Permissions updated for ${dirtyNames.length} role${dirtyNames.length === 1 ? "" : "s"}.`,
+    );
     if (ok) setDraft({});
     setSaving(false);
   }
@@ -21738,35 +22388,59 @@ function RoleManagementPage() {
       );
       commitRoles(next);
       return persistRoles(next.filter((r) => r.name === name));
-    }, "បានកែ Role");
+    }, `Role "${name}" was updated successfully.`);
   }
 
-  function toggleStatus(r) {
+  function requestToggleStatus(r) {
     const next = r.status === "Active" ? "Inactive" : "Active";
     const n = userCount(r.name);
-    if (
-      next === "Inactive" &&
-      n > 0 &&
-      !window.confirm(
-        `${n} user កំពុងប្រើ Role "${r.name}" — Closeវាធ្វើឱ្យ user ទាំងនោះបាត់សិទ្ធិAll។ បន្ត?`,
-      )
-    )
+    if (next === "Inactive" && n > 0) {
+      setConfirmAction({
+        type: "disable",
+        role: r,
+        title: "Disable role?",
+        message: `${n} user${n === 1 ? " is" : "s are"} currently using “${r.name}”. Disabling this role will remove its permissions from those users.`,
+        confirmLabel: "Disable Role",
+      });
       return;
+    }
     updateMeta(r.name, { status: next });
   }
 
-  async function removeRole(r) {
-    if (userCount(r.name) > 0)
-      return setMsg({
+  function requestRemoveRole(r) {
+    const n = userCount(r.name);
+    if (n > 0) {
+      setMsg({
         type: "err",
-        text: `មិនអាចលុប "${r.name}" បានទេ — នៅមាន user កំពុងប្រើ`,
+        text: `Cannot delete “${r.name}” — ${n} user${n === 1 ? " is" : "s are"} still using this role.`,
       });
-    if (!window.confirm(`លុប Role "${r.name}"?`)) return;
-    run(async () => {
+      return;
+    }
+    setConfirmAction({
+      type: "delete",
+      role: r,
+      title: "Delete role?",
+      message: `This will permanently remove “${r.name}”. This action cannot be undone.`,
+      confirmLabel: "Delete Role",
+    });
+  }
+
+  async function executeConfirmAction() {
+    const action = confirmAction;
+    if (!action?.role) return;
+    setConfirmAction(null);
+    const r = action.role;
+
+    if (action.type === "disable") {
+      await updateMeta(r.name, { status: "Inactive" });
+      return;
+    }
+
+    await run(async () => {
       requirePermission(
         user,
         "role.manage",
-        "មានតែ Super Admin ទេដែលអាចកែ Role",
+        "Only Super Admin can manage roles.",
       );
       commitRoles(loadRoles().filter((x) => x.name !== r.name));
       setDraft((d) => {
@@ -21779,7 +22453,7 @@ function RoleManagementPage() {
         .delete()
         .eq("name", r.name);
       return { error };
-    }, `បានលុប Role "${r.name}"`);
+    }, `Role “${r.name}” deleted successfully.`);
   }
 
   async function createRole(values) {
@@ -21791,9 +22465,9 @@ function RoleManagementPage() {
       res?.error
         ? {
             type: "warn",
-            text: `បង្កើត "${role.name}" តែក្នុង browser នេះ — ${res.error.message}`,
+            text: `Role "${role.name}" was created in this browser only. Supabase: ${res.error.message}`,
           }
-        : { type: "ok", text: `បានបង្កើត Role "${role.name}"` },
+        : { type: "ok", text: `Role "${role.name}" was created successfully.` },
     );
   }
 
@@ -21835,10 +22509,74 @@ function RoleManagementPage() {
       )}
       {msg && (
         <div
-          className={`flex items-start gap-2 text-sm rounded-md px-3 py-2 ${msgCls[msg.type]}`}
+          className="fixed top-5 right-5 z-[200] w-[min(430px,calc(100vw-2rem))] pointer-events-none"
+          aria-live={msg.type === "err" ? "assertive" : "polite"}
+          aria-atomic="true"
         >
-          <TriangleAlert size={14} className="mt-0.5 shrink-0" />
-          {msg.text}
+          <div
+            role={msg.type === "err" ? "alert" : "status"}
+            className={`pointer-events-auto relative overflow-hidden rounded-2xl border bg-white shadow-[0_18px_55px_rgba(15,23,42,0.18)] ${
+              msg.type === "ok"
+                ? "border-emerald-200"
+                : msg.type === "warn"
+                  ? "border-amber-200"
+                  : "border-rose-200"
+            }`}
+            style={{
+              animation: "cb-role-toast-in 260ms cubic-bezier(.2,.8,.2,1) both",
+            }}
+          >
+            <div className="flex items-start gap-3 p-4">
+              <div
+                className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${
+                  msg.type === "ok"
+                    ? "bg-emerald-50 text-emerald-600"
+                    : msg.type === "warn"
+                      ? "bg-amber-50 text-amber-600"
+                      : "bg-rose-50 text-rose-600"
+                }`}
+              >
+                {msg.type === "ok" ? (
+                  <Icons.CheckCircle2 size={21} />
+                ) : msg.type === "warn" ? (
+                  <Icons.AlertTriangle size={21} />
+                ) : (
+                  <Icons.XCircle size={21} />
+                )}
+              </div>
+              <div className="min-w-0 flex-1 pt-0.5">
+                <div
+                  className={`text-sm font-bold ${msg.type === "ok" ? "text-emerald-800" : msg.type === "warn" ? "text-amber-800" : "text-rose-800"}`}
+                >
+                  {msg.type === "ok"
+                    ? "Changes saved successfully"
+                    : msg.type === "warn"
+                      ? "Saved with a notice"
+                      : "Action could not be completed"}
+                </div>
+                <p className="mt-1 break-words text-sm leading-5 text-slate-600">
+                  {msg.text}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss notification"
+                onClick={() => setMsg(null)}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                <Icons.X size={16} />
+              </button>
+            </div>
+            <div className="h-1 w-full bg-slate-100">
+              <div
+                className={`h-full ${msg.type === "ok" ? "bg-emerald-500" : msg.type === "warn" ? "bg-amber-500" : "bg-rose-500"}`}
+                style={{
+                  animation: `cb-role-toast-progress ${msg.type === "err" ? "7s" : msg.type === "warn" ? "6s" : "4.2s"} linear both`,
+                }}
+              />
+            </div>
+            <style>{`@keyframes cb-role-toast-in { from { opacity: 0; transform: translate3d(18px,-8px,0) scale(.98); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } } @keyframes cb-role-toast-progress { from { width: 100%; } to { width: 0%; } } @media (prefers-reduced-motion: reduce) { [role="status"], [role="alert"] { animation: none !important; } }`}</style>
+          </div>
         </div>
       )}
       {canManage && supabase && rolesStore.server === false && (
@@ -21980,43 +22718,60 @@ function RoleManagementPage() {
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    {!isSuper && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRoleFilter(r.name);
-                            document
-                              .getElementById("permission-matrix")
-                              ?.scrollIntoView({ behavior: "smooth" });
-                          }}
-                          className="text-xs font-medium text-signal-blue px-2 py-1 rounded hover:bg-mist-50"
-                        >
-                          {canManage ? "Edit permissions" : "View permissions"}
-                        </button>
-                        {canManage && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => toggleStatus(r)}
-                              className="text-xs font-medium text-ink-700 px-2 py-1 rounded hover:bg-mist-50"
-                            >
-                              {r.status === "Active" ? "Disable" : "Enable"}
-                            </button>
-                            {!r.system && (
+                    <div className="flex items-center justify-end gap-1.5">
+                      {!isSuper && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRoleFilter(r.name);
+                              document
+                                .getElementById("permission-matrix")
+                                ?.scrollIntoView({ behavior: "smooth" });
+                            }}
+                            className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition ${
+                              canManage
+                                ? "border-signal-blue/25 bg-signal-blue/5 text-signal-blue hover:bg-signal-blue/10"
+                                : "border-mist-200 bg-white text-ink-700 hover:bg-mist-50"
+                            }`}
+                          >
+                            <Icons.Pencil size={13} />
+                            {canManage ? "Edit" : "View"}
+                          </button>
+                          {canManage && (
+                            <>
                               <button
                                 type="button"
-                                title="Delete role"
-                                onClick={() => removeRole(r)}
-                                className="p-1.5 rounded-md text-ink-600/50 hover:text-signal-red hover:bg-signal-red/5 align-middle"
+                                onClick={() => requestToggleStatus(r)}
+                                className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition ${
+                                  r.status === "Active"
+                                    ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                }`}
                               >
-                                <Icons.Trash2 size={14} />
+                                {r.status === "Active" ? (
+                                  <Icons.Ban size={13} />
+                                ) : (
+                                  <Icons.Check size={13} />
+                                )}
+                                {r.status === "Active" ? "Disable" : "Enable"}
                               </button>
-                            )}
-                          </>
-                        )}
-                      </>
-                    )}
+                              {!r.system && (
+                                <button
+                                  type="button"
+                                  title="Delete role"
+                                  aria-label={`Delete ${r.name}`}
+                                  onClick={() => requestRemoveRole(r)}
+                                  className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-mist-200 bg-white text-ink-600/55 hover:text-signal-red hover:border-signal-red/25 hover:bg-signal-red/5 transition"
+                                >
+                                  <Icons.Trash2 size={14} />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -22272,6 +23027,76 @@ function RoleManagementPage() {
           </table>
         </div>
       </div>
+
+      {confirmAction && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 backdrop-blur-[2px] p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="role-confirm-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setConfirmAction(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setConfirmAction(null);
+          }}
+          tabIndex={-1}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-mist-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 px-5 pt-5">
+              <div
+                className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${confirmAction.type === "delete" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600"}`}
+              >
+                {confirmAction.type === "delete" ? (
+                  <Icons.Trash2 size={20} />
+                ) : (
+                  <Icons.Ban size={20} />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3
+                  id="role-confirm-title"
+                  className="text-base font-bold text-ink-900"
+                >
+                  {confirmAction.title}
+                </h3>
+                <p className="mt-1.5 text-sm leading-5 text-ink-600/65">
+                  {confirmAction.message}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setConfirmAction(null)}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink-600/50 hover:bg-mist-50 hover:text-ink-900"
+              >
+                <Icons.X size={17} />
+              </button>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2 border-t border-mist-200 bg-mist-50/60 px-5 py-3.5">
+              <button
+                type="button"
+                onClick={() => setConfirmAction(null)}
+                className="rounded-lg border border-mist-200 bg-white px-4 py-2 text-sm font-semibold text-ink-700 hover:bg-mist-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeConfirmAction}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm ${confirmAction.type === "delete" ? "bg-red-600 hover:bg-red-700" : "bg-amber-600 hover:bg-amber-700"}`}
+              >
+                {confirmAction.type === "delete" ? (
+                  <Icons.Trash2 size={15} />
+                ) : (
+                  <Icons.Ban size={15} />
+                )}
+                {confirmAction.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <CreateRoleModal
         open={createOpen}
@@ -23678,6 +24503,122 @@ function Placeholder({ title }) {
 }
 
 // ------------------------------------------------------------
+// Global Toast Notifications — shared by TK / Package operations
+// ------------------------------------------------------------
+function emitCBToast(type, title, text) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent("cb-global-toast", {
+      detail: { type, title, text },
+    }),
+  );
+}
+
+function GlobalToastHost() {
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    const onToast = (event) => {
+      const detail = event?.detail || {};
+      setToast({
+        type: detail.type || "ok",
+        title: detail.title || "Action completed",
+        text: detail.text || "",
+        id: Date.now(),
+      });
+    };
+    window.addEventListener("cb-global-toast", onToast);
+    return () => window.removeEventListener("cb-global-toast", onToast);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const ms =
+      toast.type === "err" ? 6500 : toast.type === "warn" ? 5600 : 4200;
+    const timer = window.setTimeout(() => setToast(null), ms);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  if (!toast) return null;
+
+  const palette =
+    toast.type === "err"
+      ? {
+          border: "border-rose-200",
+          icon: "bg-rose-50 text-rose-600",
+          title: "text-rose-800",
+          bar: "bg-rose-500",
+          iconNode: <Icons.XCircle size={21} />,
+        }
+      : toast.type === "warn"
+        ? {
+            border: "border-amber-200",
+            icon: "bg-amber-50 text-amber-600",
+            title: "text-amber-800",
+            bar: "bg-amber-500",
+            iconNode: <Icons.AlertTriangle size={21} />,
+          }
+        : {
+            border: "border-emerald-200",
+            icon: "bg-emerald-50 text-emerald-600",
+            title: "text-emerald-800",
+            bar: "bg-emerald-500",
+            iconNode: <Icons.CheckCircle2 size={21} />,
+          };
+
+  return (
+    <div
+      className="fixed top-5 right-5 z-[999] w-[min(430px,calc(100vw-2rem))]"
+      aria-live={toast.type === "err" ? "assertive" : "polite"}
+      aria-atomic="true"
+    >
+      <div
+        role={toast.type === "err" ? "alert" : "status"}
+        className={`relative overflow-hidden rounded-2xl border bg-white shadow-[0_18px_55px_rgba(15,23,42,0.18)] ${palette.border}`}
+        style={{
+          animation: "cb-global-toast-in 260ms cubic-bezier(.2,.8,.2,1) both",
+        }}
+      >
+        <div className="flex items-start gap-3 p-4">
+          <div
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${palette.icon}`}
+          >
+            {palette.iconNode}
+          </div>
+          <div className="min-w-0 flex-1 pt-0.5">
+            <div className={`text-sm font-bold ${palette.title}`}>
+              {toast.title}
+            </div>
+            {toast.text && (
+              <p className="mt-1 break-words text-sm leading-5 text-slate-600">
+                {toast.text}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={() => setToast(null)}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          >
+            <Icons.X size={16} />
+          </button>
+        </div>
+        <div className="h-1 w-full bg-slate-100">
+          <div
+            className={`h-full ${palette.bar}`}
+            style={{
+              animation: `cb-global-toast-progress ${toast.type === "err" ? "6.5s" : toast.type === "warn" ? "5.6s" : "4.2s"} linear both`,
+            }}
+          />
+        </div>
+      </div>
+      <style>{`@keyframes cb-global-toast-in { from { opacity: 0; transform: translate3d(18px,-8px,0) scale(.98); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } } @keyframes cb-global-toast-progress { from { width: 100%; } to { width: 0%; } } @media (prefers-reduced-motion: reduce) { [role="status"], [role="alert"] { animation: none !important; } }`}</style>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
 // App.jsx
 // ------------------------------------------------------------
 // Every nav item except Dashboard gets its module config rendered as a
@@ -23687,9 +24628,857 @@ const OTHER_ROUTES = NAV_SECTIONS.flatMap((s) => s.items).filter(
   (item) => item.path !== "/",
 );
 
+function SettingsPage() {
+  const { user } = useAuth();
+  const [settings, setSettings] = useState(() => getSystemSettings());
+  const [tab, setTab] = useState("company");
+  const [toast, setToast] = useState(null);
+  const [loading, setLoading] = useState(!!supabase);
+  const [saving, setSaving] = useState(false);
+  const [remoteError, setRemoteError] = useState("");
+  const [policyHistory, setPolicyHistory] = useState([]);
+
+  const notify = (title, text, type = "success") => {
+    setToast({ title, text, type, id: Date.now() });
+    window.setTimeout(() => setToast(null), type === "err" ? 6500 : 4200);
+  };
+
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      if (!supabase) {
+        setLoading(false);
+        setPolicyHistory(lsRead("cargo_bridge_policy_history_v1", []));
+        return;
+      }
+      try {
+        setLoading(true);
+        setRemoteError("");
+        const [remoteSettings, history] = await Promise.all([
+          fetchSystemSettingsRemote(),
+          fetchPolicyHistoryRemote(),
+        ]);
+        if (!alive) return;
+        if (remoteSettings) {
+          SYSTEM_SETTINGS_CACHE = mergeSystemSettings(remoteSettings);
+          setSettings(SYSTEM_SETTINGS_CACHE);
+        } else setSettings(DEFAULT_SYSTEM_SETTINGS);
+        setPolicyHistory(history);
+      } catch (err) {
+        if (!alive) return;
+        const msg =
+          err?.message || "Unable to load system settings from Supabase.";
+        setRemoteError(msg);
+        // IMPORTANT: do not silently save to localStorage when Supabase is configured.
+        notify("Settings database error", msg, "err");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const update = (section, key, value) =>
+    setSettings((prev) => ({
+      ...prev,
+      [section]: { ...prev[section], [key]: value },
+    }));
+
+  const save = async () => {
+    try {
+      setSaving(true);
+      setRemoteError("");
+      if (supabase) {
+        await saveSystemSettingsRemote(settings, user?.id || null);
+        if (tab === "shipping") {
+          await insertShippingPolicyRemote(settings.shipping, user?.id || null);
+          setPolicyHistory(await fetchPolicyHistoryRemote());
+        }
+      } else {
+        saveSystemSettings(settings);
+        if (tab === "shipping") {
+          const history = [
+            ...lsRead("cargo_bridge_policy_history_v1", []),
+            {
+              id: `POL-${Date.now()}`,
+              name: settings.shipping.policyName,
+              effectiveDate: settings.shipping.effectiveDate,
+              savedAt: new Date().toISOString(),
+              rates: settings.shipping.cargoPolicies,
+            },
+          ].slice(-20);
+          setPolicyHistory(history);
+          lsWrite("cargo_bridge_policy_history_v1", history);
+        }
+      }
+      saveSystemSettings(settings);
+      notify(
+        "Settings saved",
+        tab === "company"
+          ? "Company profile is now synced to Supabase."
+          : tab === "shipping"
+            ? "Normal and Sensitive shipping policies are synced to Supabase and added to policy history."
+            : "Print label settings are now synced to Supabase.",
+      );
+    } catch (err) {
+      const msg = err?.message || "Unable to save settings.";
+      setRemoteError(msg);
+      notify("Save failed", msg, "err");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onLogo = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/"))
+      return notify("Invalid logo", "Please choose an image file.", "warn");
+    if (file.size > 2 * 1024 * 1024)
+      return notify(
+        "Logo too large",
+        "Please use an image smaller than 2 MB.",
+        "warn",
+      );
+    try {
+      if (supabase) {
+        setSaving(true);
+        const logoUrl = await uploadCompanyLogoRemote(file, user?.id || null);
+        const next = mergeSystemSettings({
+          ...settings,
+          company: { ...settings.company, logoDataUrl: "", logoUrl },
+        });
+        await saveSystemSettingsRemote(next, user?.id || null);
+        setSettings(next);
+        saveSystemSettings(next);
+        notify(
+          "Logo updated",
+          "Company logo was uploaded to Supabase and is available across devices.",
+        );
+      } else {
+        const reader = new FileReader();
+        reader.onload = () => update("company", "logoDataUrl", reader.result);
+        reader.readAsDataURL(file);
+        notify(
+          "Logo ready",
+          "Save Changes to keep the logo in this browser.",
+          "warn",
+        );
+      }
+    } catch (err) {
+      notify(
+        "Logo upload failed",
+        err?.message || "Unable to upload company logo.",
+        "err",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeLogo = async () => {
+    try {
+      setSaving(true);
+      const old = settings.company.logoUrl;
+      const next = mergeSystemSettings({
+        ...settings,
+        company: { ...settings.company, logoDataUrl: "", logoUrl: "" },
+      });
+      if (supabase) {
+        await removeCompanyLogoRemote(old);
+        await saveSystemSettingsRemote(next, user?.id || null);
+      } else {
+        saveSystemSettings(next);
+      }
+      setSettings(next);
+      saveSystemSettings(next);
+      notify(
+        "Logo removed",
+        "Company logo was removed from the shared company settings.",
+      );
+    } catch (err) {
+      notify(
+        "Remove failed",
+        err?.message || "Unable to remove company logo.",
+        "err",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const tabs = [
+    ["company", "Company Profile", Icons.Building2],
+    ["shipping", "Shipping & Pricing", Icons.BadgeDollarSign],
+    ["history", "Policy History", Icons.History],
+    ["label", "Print Label", Icons.Printer],
+  ];
+  const input =
+    "mt-1.5 w-full h-11 rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+  const moneyInput = (value, onChange) => (
+    <input
+      type="number"
+      min="0"
+      step="0.01"
+      className={input}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value || 0))}
+    />
+  );
+  const logoSrc =
+    settings.company.logoUrl || settings.company.logoDataUrl || "";
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="p-5 md:p-7 max-w-[1400px] mx-auto">
+        <div className="mb-6 flex flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+              System Settings
+            </h1>
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${supabase && !remoteError ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${supabase && !remoteError ? "bg-emerald-500" : "bg-amber-500"}`}
+              />
+              {supabase && !remoteError
+                ? "Supabase synced"
+                : "Local / offline mode"}
+            </span>
+          </div>
+          <p className="text-sm text-slate-500">
+            Manage company identity, shipping policies and print label
+            configuration.
+          </p>
+        </div>
+
+        {remoteError && supabase && (
+          <div className="mb-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5 text-sm text-red-800">
+            <Icons.TriangleAlert size={18} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="font-bold">
+                Supabase settings are not available
+              </div>
+              <div className="mt-0.5">
+                Run the provided SQL migration in Supabase, then reload this
+                page. Changes will not be silently stored only in localStorage.
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-5">
+          <div className="rounded-2xl border border-slate-200 bg-white p-2 h-fit shadow-sm">
+            {tabs.map(([id, label, I]) => (
+              <button
+                key={id}
+                onClick={() => setTab(id)}
+                className={`w-full flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold text-left transition ${tab === id ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+              >
+                <I size={17} />
+                <span className="flex-1">{label}</span>
+                {tab === id && <Icons.ChevronRight size={15} />}
+              </button>
+            ))}
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            {tab === "company" && (
+              <>
+                <div className="p-6 border-b border-slate-100">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Company Profile
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    This information is shared across browsers and used on
+                    printed labels.
+                  </p>
+                </div>
+                <div className="p-6 space-y-6">
+                  <div className="flex flex-col sm:flex-row items-start gap-5 rounded-2xl bg-slate-50 p-4 border border-slate-100">
+                    <div className="w-24 h-24 rounded-2xl bg-white border border-slate-200 grid place-items-center overflow-hidden shadow-sm">
+                      {logoSrc ? (
+                        <img
+                          src={logoSrc}
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-blue-600 text-white grid place-items-center">
+                          <Icons.GitBranch size={24} />
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-bold text-slate-900">
+                        Company Logo
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1 mb-3">
+                        PNG, JPG or SVG · Maximum 2 MB · stored in Supabase
+                        Storage
+                      </p>
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+                        <Icons.Upload size={16} /> Upload Logo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={onLogo}
+                          disabled={saving}
+                        />
+                      </label>
+                      {logoSrc && (
+                        <button
+                          type="button"
+                          onClick={removeLogo}
+                          disabled={saving}
+                          className="ml-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid md:grid-cols-2 gap-5">
+                    {[
+                      ["name", "Company Name", "Cargo Bridge"],
+                      ["shortName", "Short Name", "CB"],
+                      ["phone", "Phone", "+855 ..."],
+                      ["email", "Email", "company@example.com"],
+                      ["website", "Website", "https://..."],
+                    ].map(([k, l, p]) => (
+                      <label
+                        key={k}
+                        className="text-sm font-semibold text-slate-700"
+                      >
+                        {l}
+                        <input
+                          className={input}
+                          placeholder={p}
+                          value={settings.company[k] || ""}
+                          onChange={(e) => update("company", k, e.target.value)}
+                        />
+                      </label>
+                    ))}
+                    <label className="text-sm font-semibold text-slate-700">
+                      Currency
+                      <select
+                        className={input}
+                        value={settings.company.currency}
+                        onChange={(e) =>
+                          update("company", "currency", e.target.value)
+                        }
+                      >
+                        <option>USD</option>
+                        <option>KHR</option>
+                        <option>THB</option>
+                        <option>CNY</option>
+                      </select>
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700 md:col-span-2">
+                      Address
+                      <textarea
+                        className="mt-1.5 w-full min-h-24 rounded-xl border border-slate-200 bg-white p-3.5 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                        value={settings.company.address || ""}
+                        onChange={(e) =>
+                          update("company", "address", e.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+              </>
+            )}
+            {tab === "shipping" && (
+              <>
+                <div className="p-6 border-b border-slate-100">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Shipping & Pricing Policy
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Configure separate freight rules for Normal and Sensitive
+                    cargo. Small Package uses S / M / L rates; Dimension Based
+                    uses actual CBM.
+                  </p>
+                </div>
+                <div className="p-6 space-y-6">
+                  <div className="grid md:grid-cols-2 gap-5">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Policy Name
+                      <input
+                        className={input}
+                        value={settings.shipping.policyName}
+                        onChange={(e) =>
+                          update("shipping", "policyName", e.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Effective Date
+                      <input
+                        type="date"
+                        className={input}
+                        value={settings.shipping.effectiveDate}
+                        onChange={(e) =>
+                          update("shipping", "effectiveDate", e.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Currency
+                      <select
+                        className={input}
+                        value={settings.shipping.currency}
+                        onChange={(e) =>
+                          update("shipping", "currency", e.target.value)
+                        }
+                      >
+                        <option>USD</option>
+                        <option>KHR</option>
+                        <option>THB</option>
+                        <option>CNY</option>
+                      </select>
+                    </label>
+                    <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-xs text-blue-800 flex items-start gap-2">
+                      <Icons.Info size={16} className="shrink-0 mt-0.5" />
+                      <span>
+                        <b>Small Package:</b> select only S / M / L.{" "}
+                        <b>Dimension Based:</b> enter actual Length × Width ×
+                        Height and the system calculates CBM.
+                      </span>
+                    </div>
+                  </div>
+
+                  {["Normal", "Sensitive"].map((cargoType) => (
+                    <div
+                      key={cargoType}
+                      className="rounded-2xl border border-slate-200 overflow-hidden"
+                    >
+                      <div
+                        className={`px-5 py-4 flex items-center justify-between ${cargoType === "Sensitive" ? "bg-amber-50/70" : "bg-blue-50/70"}`}
+                      >
+                        <div>
+                          <div className="font-bold text-slate-900">
+                            {cargoType} Cargo
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            Separate pricing policy for{" "}
+                            {cargoType.toLowerCase()} shipments.
+                          </div>
+                        </div>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${cargoType === "Sensitive" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}
+                        >
+                          {cargoType === "Sensitive"
+                            ? "Special Rate"
+                            : "Standard Rate"}
+                        </span>
+                      </div>
+                      <div className="p-5 space-y-5">
+                        <div>
+                          <div className="text-sm font-bold text-slate-900 mb-3">
+                            Small Package — Size Rates
+                          </div>
+                          <div className="grid sm:grid-cols-3 gap-4">
+                            {["S", "M", "L"].map((size) => (
+                              <label
+                                key={size}
+                                className="rounded-xl border border-slate-200 p-4 text-sm font-semibold text-slate-700"
+                              >
+                                <span>Size {size}</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  className={input}
+                                  value={
+                                    settings.shipping.cargoPolicies?.[cargoType]
+                                      ?.sizeRates?.[size] ?? 0
+                                  }
+                                  onChange={(e) =>
+                                    setSettings((p) => ({
+                                      ...p,
+                                      shipping: {
+                                        ...p.shipping,
+                                        cargoPolicies: {
+                                          ...p.shipping.cargoPolicies,
+                                          [cargoType]: {
+                                            ...p.shipping.cargoPolicies[
+                                              cargoType
+                                            ],
+                                            sizeRates: {
+                                              ...p.shipping.cargoPolicies[
+                                                cargoType
+                                              ].sizeRates,
+                                              [size]: Number(
+                                                e.target.value || 0,
+                                              ),
+                                            },
+                                          },
+                                        },
+                                      },
+                                    }))
+                                  }
+                                />
+                                <span className="text-xs text-slate-400">
+                                  {settings.shipping.currency} · fixed price
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-sm font-bold text-slate-900 mb-3">
+                            Dimension Based — Actual Size
+                          </div>
+                          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <label className="text-sm font-semibold text-slate-700">
+                              CBM Rate
+                              {moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]
+                                  ?.cbmRate,
+                                (v) =>
+                                  setSettings((p) => ({
+                                    ...p,
+                                    shipping: {
+                                      ...p.shipping,
+                                      cargoPolicies: {
+                                        ...p.shipping.cargoPolicies,
+                                        [cargoType]: {
+                                          ...p.shipping.cargoPolicies[
+                                            cargoType
+                                          ],
+                                          cbmRate: v,
+                                        },
+                                      },
+                                    },
+                                  })),
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {settings.shipping.currency} / CBM
+                              </span>
+                            </label>
+                            <label className="text-sm font-semibold text-slate-700">
+                              Minimum Freight
+                              {moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]
+                                  ?.minimumFreight,
+                                (v) =>
+                                  setSettings((p) => ({
+                                    ...p,
+                                    shipping: {
+                                      ...p.shipping,
+                                      cargoPolicies: {
+                                        ...p.shipping.cargoPolicies,
+                                        [cargoType]: {
+                                          ...p.shipping.cargoPolicies[
+                                            cargoType
+                                          ],
+                                          minimumFreight: v,
+                                        },
+                                      },
+                                    },
+                                  })),
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {settings.shipping.currency}
+                              </span>
+                            </label>
+                            <label className="text-sm font-semibold text-slate-700">
+                              Weight Rate
+                              {moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]
+                                  ?.weightRate,
+                                (v) =>
+                                  setSettings((p) => ({
+                                    ...p,
+                                    shipping: {
+                                      ...p.shipping,
+                                      cargoPolicies: {
+                                        ...p.shipping.cargoPolicies,
+                                        [cargoType]: {
+                                          ...p.shipping.cargoPolicies[
+                                            cargoType
+                                          ],
+                                          weightRate: v,
+                                        },
+                                      },
+                                    },
+                                  })),
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {settings.shipping.currency} / KG
+                              </span>
+                            </label>
+                            <label className="text-sm font-semibold text-slate-700">
+                              Handling / Service Fee
+                              {moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]
+                                  ?.handlingFee,
+                                (v) =>
+                                  setSettings((p) => ({
+                                    ...p,
+                                    shipping: {
+                                      ...p.shipping,
+                                      cargoPolicies: {
+                                        ...p.shipping.cargoPolicies,
+                                        [cargoType]: {
+                                          ...p.shipping.cargoPolicies[
+                                            cargoType
+                                          ],
+                                          handlingFee: v,
+                                        },
+                                      },
+                                    },
+                                  })),
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {settings.shipping.currency}
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                        <div className="grid md:grid-cols-2 gap-4">
+                          <label className="text-sm font-semibold text-slate-700">
+                            Delivery Fee
+                            {moneyInput(
+                              settings.shipping.cargoPolicies?.[cargoType]
+                                ?.deliveryFee,
+                              (v) =>
+                                setSettings((p) => ({
+                                  ...p,
+                                  shipping: {
+                                    ...p.shipping,
+                                    cargoPolicies: {
+                                      ...p.shipping.cargoPolicies,
+                                      [cargoType]: {
+                                        ...p.shipping.cargoPolicies[cargoType],
+                                        deliveryFee: v,
+                                      },
+                                    },
+                                  },
+                                })),
+                            )}
+                            <span className="text-xs text-slate-400">
+                              {settings.shipping.currency}
+                            </span>
+                          </label>
+                          <label className="text-sm font-semibold text-slate-700">
+                            Branch Delivery Fee
+                            {moneyInput(
+                              settings.shipping.cargoPolicies?.[cargoType]
+                                ?.branchDeliveryFee,
+                              (v) =>
+                                setSettings((p) => ({
+                                  ...p,
+                                  shipping: {
+                                    ...p.shipping,
+                                    cargoPolicies: {
+                                      ...p.shipping.cargoPolicies,
+                                      [cargoType]: {
+                                        ...p.shipping.cargoPolicies[cargoType],
+                                        branchDeliveryFee: v,
+                                      },
+                                    },
+                                  },
+                                })),
+                            )}
+                            <span className="text-xs text-slate-400">
+                              {settings.shipping.currency}
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-800 flex gap-3">
+                    <Icons.Info size={18} className="shrink-0 mt-0.5" />
+                    <span>
+                      Pricing is stored in Supabase. Existing packages keep
+                      their recorded freight. New packages read the current
+                      Normal/Sensitive policy at the time they are saved.
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+            {tab === "history" && (
+              <>
+                <div className="p-6 border-b border-slate-100">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Shipping Policy History
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    This history is shared across devices from Supabase.
+                  </p>
+                </div>
+                <div className="p-6">
+                  {loading ? (
+                    <div className="py-16 text-center text-slate-400">
+                      <Icons.Loader2
+                        className="mx-auto mb-3 animate-spin"
+                        size={28}
+                      />
+                      Loading policy history...
+                    </div>
+                  ) : policyHistory.length ? (
+                    <div className="space-y-3">
+                      {policyHistory.map((x) => (
+                        <div
+                          key={x.id}
+                          className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-slate-200 p-4"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 grid place-items-center">
+                            <Icons.History size={18} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-bold text-slate-900">
+                              {x.name}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-1">
+                              Effective {x.effectiveDate} · Saved{" "}
+                              {formatIso(x.savedAt)}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-600 text-right">
+                            <div>
+                              Normal: S {x.rates?.Normal?.sizeRates?.S ?? 0} · M{" "}
+                              {x.rates?.Normal?.sizeRates?.M ?? 0} · L{" "}
+                              {x.rates?.Normal?.sizeRates?.L ?? 0}
+                            </div>
+                            <div className="mt-1">
+                              Sensitive: S{" "}
+                              {x.rates?.Sensitive?.sizeRates?.S ?? 0} · M{" "}
+                              {x.rates?.Sensitive?.sizeRates?.M ?? 0} · L{" "}
+                              {x.rates?.Sensitive?.sizeRates?.L ?? 0}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-16 text-center text-slate-400">
+                      <Icons.History
+                        size={30}
+                        className="mx-auto mb-3 opacity-50"
+                      />
+                      No policy changes recorded yet.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            {tab === "label" && (
+              <>
+                <div className="p-6 border-b border-slate-100">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Print Label Settings
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Control which company and package information appears on
+                    printed labels.
+                  </p>
+                </div>
+                <div className="p-6 space-y-3">
+                  {[
+                    ["showLogo", "Company Logo"],
+                    ["showCompanyName", "Company Name"],
+                    ["showPhone", "Phone"],
+                    ["showEmail", "Email"],
+                    ["showAddress", "Address"],
+                    ["showBarcode", "Barcode"],
+                    ["showQr", "QR Code"],
+                    ["showFreight", "Freight Fee"],
+                    ["showContainer", "Container"],
+                  ].map(([k, l]) => (
+                    <label
+                      key={k}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3.5 cursor-pointer hover:bg-slate-50"
+                    >
+                      <span className="font-semibold text-sm text-slate-800">
+                        {l}
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="h-5 w-5 accent-blue-600"
+                        checked={!!settings.label[k]}
+                        onChange={(e) => update("label", k, e.target.checked)}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
+              <button
+                type="button"
+                onClick={async () => {
+                  if (supabase) {
+                    try {
+                      const remote = await fetchSystemSettingsRemote();
+                      if (remote) setSettings(remote);
+                    } catch (e) {
+                      notify("Reload failed", e.message, "err");
+                    }
+                  } else setSettings(getSystemSettings());
+                }}
+                disabled={saving || loading}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={save}
+                disabled={saving || loading || !!remoteError}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+              >
+                <Icons.Save size={16} />
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {toast && (
+        <div
+          className={`fixed right-5 top-5 z-[100] w-[min(390px,calc(100vw-2rem))] rounded-2xl border bg-white shadow-2xl p-4 flex gap-3 ${toast.type === "err" ? "border-red-200" : toast.type === "warn" ? "border-amber-200" : "border-emerald-200"}`}
+          role={toast.type === "err" ? "alert" : "status"}
+        >
+          <div
+            className={`h-10 w-10 rounded-xl grid place-items-center ${toast.type === "err" ? "bg-red-50 text-red-600" : toast.type === "warn" ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"}`}
+          >
+            {toast.type === "err" ? (
+              <Icons.XCircle size={20} />
+            ) : toast.type === "warn" ? (
+              <Icons.TriangleAlert size={20} />
+            ) : (
+              <Icons.CircleCheck size={20} />
+            )}
+          </div>
+          <div className="flex-1">
+            <div className="font-bold text-sm text-slate-900">
+              {toast.title}
+            </div>
+            <div className="text-xs text-slate-500 mt-1">{toast.text}</div>
+          </div>
+          <button onClick={() => setToast(null)}>
+            <Icons.X size={16} className="text-slate-400" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminApp() {
   return (
     <PackageTrackingProvider>
+      <GlobalToastHost />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
@@ -23714,6 +25503,7 @@ function AdminApp() {
           <Route path="/warehouses" element={<WarehouseManagementPage />} />
           <Route path="/kh-warehouse" element={<KhWarehousePage />} />
           <Route path="/roles" element={<RoleManagementPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route
             path="/permissions"
             element={<Navigate to="/roles" replace />}
@@ -23729,6 +25519,7 @@ function AdminApp() {
                 "/kh-warehouse",
                 "/containers",
                 "/roles",
+                "/settings",
               ].includes(item.path),
           ).map((item) => {
             const config = MODULES[item.path];
