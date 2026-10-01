@@ -151,7 +151,7 @@ const skWidth = (i, j = 0) =>
   `${SK_WIDTHS[(i * 3 + j * 7) % SK_WIDTHS.length]}%`;
 
 // Wrapper that announces "loading" to screen readers once.
-function SkeletonRegion({ className = "", children, label = "កំពុងផ្ទុក..." }) {
+function SkeletonRegion({ className = "", children, label = "Loading..." }) {
   return (
     <div
       role="status"
@@ -370,7 +370,7 @@ function AppShellSkeleton() {
       role="status"
       aria-busy="true"
     >
-      <span className="sr-only">កំពុងផ្ទុក...</span>
+      <span className="sr-only">Loading...</span>
 
       <div className="hidden lg:flex w-60 shrink-0 flex-col bg-white border-r border-mist-200 p-4 overflow-hidden">
         <Skeleton className="h-8 w-36 mb-5" />
@@ -588,7 +588,7 @@ const NAV_SECTIONS = [
 
 const SUPER_ADMIN = "Super Admin";
 const ROLES_KEY = "cargo_bridge_roles_v1";
-const NO_PERM_MSG = "អ្នកគ្មានសិទ្ធិធ្វើសកម្មភាពនេះទេ";
+const NO_PERM_MSG = "You do not have permission to perform this action.";
 
 const ROLE_SCOPES = [
   "GLOBAL",
@@ -1169,21 +1169,26 @@ const col = (key, label, extra = {}) => ({ key, label, ...extra });
 const MODULES = {
   "/packages": {
     title: "Packages / TK",
-    subtitle: "កញ្ចប់ទំនិញនីមួយៗ ចាប់ពី China Warehouse រហូតដល់ Delivery",
-    primaryAction: "TK ថ្មី",
+    subtitle: "Every package from China Warehouse to final delivery",
+    primaryAction: "New TK",
     stats: [
       {
         icon: "Package",
         label: "Total Packages",
-        value: "18,420",
+        metric: "total",
         tone: "ink",
       },
-      { icon: "Warehouse", label: "នៅ China", value: "2,140", tone: "blue" },
-      { icon: "Ship", label: "In Transit", value: "4,860", tone: "amber" },
+      {
+        icon: "Warehouse",
+        label: "At China Warehouse",
+        metric: "atChina",
+        tone: "blue",
+      },
+      { icon: "Ship", label: "In Transit", metric: "inTransit", tone: "amber" },
       {
         icon: "CircleCheck",
         label: "Delivered",
-        value: "11,420",
+        metric: "delivered",
         tone: "teal",
       },
     ],
@@ -1206,63 +1211,33 @@ const MODULES = {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
     ],
-    rows: [
-      {
-        tk: "TK202609250041",
-        customer: "KH-000582 · Sothon Shop",
-        weight: "12.5 KG",
-        cbm: "0.03",
-        warehouse: "CN-GZ-01",
-        status: "Outbound Origin",
-      },
-      {
-        tk: "TK202609250038",
-        customer: "KH-000117 · Dara Trading",
-        weight: "4.2 KG",
-        cbm: "0.01",
-        warehouse: "CN-YW-01",
-        status: "QC Completed",
-      },
-      {
-        tk: "TK202609250035",
-        customer: "KH-000721 · Chenda Mart",
-        weight: "8.0 KG",
-        cbm: "0.02",
-        warehouse: "CN-GZ-01",
-        status: "Inbound Origin",
-      },
-      {
-        tk: "TK202609250029",
-        customer: "KH-000582 · Sothon Shop",
-        weight: "15.8 KG",
-        cbm: "0.04",
-        warehouse: "CN-SZ-01",
-        status: "Weight Difference",
-      },
-      {
-        tk: "TK202609250012",
-        customer: "KH-000340 · Bopha Import",
-        weight: "6.4 KG",
-        cbm: "0.02",
-        warehouse: "CN-GZ-01",
-        status: "Consolidated",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/inbound-origin": {
     title: "Inbound Origin",
-    subtitle: "ការទទួលទំនិញនៅ China Warehouse — Scan TK, Weight, Dimension, QC",
+    subtitle:
+      "Receive goods at China Warehouse — scan TK, weight, dimensions and QC",
     primaryAction: "Scan TK",
     stats: [
       {
         icon: "LogIn",
-        label: "Received (ថ្ងៃនេះ)",
-        value: "1,245",
+        label: "Received (Today)",
+        metric: "receivedToday",
         tone: "blue",
       },
-      { icon: "ScanLine", label: "Awaiting QC", value: "210", tone: "amber" },
-      { icon: "UserX", label: "Customer Not Found", value: "6", tone: "red" },
+      {
+        icon: "ScanLine",
+        label: "Awaiting QC",
+        metric: "awaitingQc",
+        tone: "amber",
+      },
+      {
+        icon: "UserX",
+        label: "Customer Not Found",
+        metric: "notFound",
+        tone: "red",
+      },
     ],
     columns: [
       col("tk", "TK Number", {
@@ -1281,45 +1256,13 @@ const MODULES = {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
     ],
-    rows: [
-      {
-        tk: "TK202609250041",
-        customer: "KH-000582 · Sothon Shop",
-        supplier: "1688 Supplier A",
-        weight: "12.5 KG",
-        receivedBy: "Li Wei",
-        status: "Inbound Origin",
-      },
-      {
-        tk: "TK202609250040",
-        customer: "KH-000528 (Not Found)",
-        supplier: "Taobao Shop B",
-        weight: "3.1 KG",
-        receivedBy: "Li Wei",
-        status: "Hold",
-      },
-      {
-        tk: "TK202609250039",
-        customer: "KH-000117 · Dara Trading",
-        supplier: "Tmall Store C",
-        weight: "4.2 KG",
-        receivedBy: "Zhang Min",
-        status: "Inbound Origin",
-      },
-      {
-        tk: "TK202609250038",
-        customer: "KH-000721 · Chenda Mart",
-        supplier: "1688 Supplier D",
-        weight: "8.0 KG",
-        receivedBy: "Zhang Min",
-        status: "Inbound Origin",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/outbound-origin": {
     title: "Outbound Origin",
-    subtitle: "ការដឹកចេញពី China Warehouse — Scan TK ដើម្បី Confirm Loading",
+    subtitle:
+      "Outbound processing from China Warehouse — scan TK to confirm loading",
     // Same TK registry as Packages / TK and Inbound Origin (see
     // PackageTrackingContext) — a TK only appears here once it's been
     // scanned out, and its Status is the same shared Status shown
@@ -1329,14 +1272,14 @@ const MODULES = {
       {
         icon: "LogOut",
         label: "Total CBM",
-        value: "1,126.71",
+        metric: "totalCbm",
         unit: "M³",
         tone: "blue",
       },
       {
         icon: "Weight",
         label: "Total Weight",
-        value: "280,514",
+        metric: "totalWeight",
         unit: "KG",
         tone: "ink",
       },
@@ -1366,11 +1309,26 @@ const MODULES = {
 
   "/shipments": {
     title: "Shipments",
-    subtitle: "ការដឹកជញ្ជូនដែល Group TK ជាច្រើន",
+    subtitle: "Shipments that group multiple TKs",
     stats: [
-      { icon: "Truck", label: "Active Shipments", value: "58", tone: "blue" },
-      { icon: "Ship", label: "In Transit", value: "31", tone: "amber" },
-      { icon: "CircleCheck", label: "Arrived", value: "27", tone: "teal" },
+      {
+        icon: "Truck",
+        label: "Active Shipments",
+        metric: "total",
+        tone: "blue",
+      },
+      {
+        icon: "Ship",
+        label: "In Transit",
+        metric: "shipInTransit",
+        tone: "amber",
+      },
+      {
+        icon: "CircleCheck",
+        label: "Arrived",
+        metric: "shipArrived",
+        tone: "teal",
+      },
     ],
     columns: [
       col("shipment_no", "Shipment No", { strong: true }),
@@ -1380,74 +1338,35 @@ const MODULES = {
       col("weight", "Weight"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        id: "SHP-2026-000125",
-        route: "China → Cambodia",
-        transport: "Sea",
-        packages: 426,
-        weight: "8,240 KG",
-        status: "In Transit",
-      },
-      {
-        id: "SHP-2026-000124",
-        route: "China → Cambodia",
-        transport: "Land",
-        packages: 310,
-        weight: "6,010 KG",
-        status: "Arrived",
-      },
-      {
-        id: "SHP-2026-000123",
-        route: "China → Cambodia",
-        transport: "Sea",
-        packages: 198,
-        weight: "3,420 KG",
-        status: "Customs Clearance",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/arrival": {
     title: "Cambodia Arrival",
-    subtitle: "ការមកដល់នៅកំពង់ផែ / Dry Port",
+    subtitle: "Arrival at port / dry port",
     columns: [
       col("shipment_no", "Shipment No", { strong: true }),
       col("port", "Port / Dry Port"),
       col("arrivalDate", "Arrival Date"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        container: "MSKU1234567",
-        port: "Sihanoukville Port",
-        arrivalDate: "05 Oct 2026",
-        status: "Pending",
-      },
-      {
-        container: "TCLU9988771",
-        port: "Phnom Penh Dry Port",
-        arrivalDate: "02 Oct 2026",
-        status: "Customs",
-      },
-      {
-        container: "CMAU4471122",
-        port: "Sihanoukville Port",
-        arrivalDate: "28 Sep 2026",
-        status: "Released",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/kh-warehouse": {
     title: "Cambodia Warehouse",
-    subtitle: "ការទទួល Container និង TK នៅឃ្លាំងកម្ពុជា",
+    subtitle: "Receive containers and TKs at Cambodia Warehouse",
     stats: [
-      { icon: "Warehouse", label: "In Stock", value: "1,582", tone: "teal" },
+      {
+        icon: "Warehouse",
+        label: "In Stock",
+        metric: "khScanned",
+        tone: "teal",
+      },
       {
         icon: "TriangleAlert",
-        label: "Missing (ថ្ងៃនេះ)",
-        value: "6",
+        label: "Missing",
+        metric: "khMissing",
         tone: "red",
       },
     ],
@@ -1458,34 +1377,12 @@ const MODULES = {
       col("missing", "Missing"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        container: "MSKU1234567",
-        expected: 426,
-        scanned: 420,
-        missing: 6,
-        status: "Missing",
-      },
-      {
-        container: "TCLU9988771",
-        expected: 198,
-        scanned: 198,
-        missing: 0,
-        status: "Completed",
-      },
-      {
-        container: "CMAU4471122",
-        expected: 380,
-        scanned: 380,
-        missing: 0,
-        status: "Completed",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/sorting": {
     title: "Warehouse Sorting",
-    subtitle: "តម្រៀប TK ទៅតាម Customer និង Location",
+    subtitle: "Sort TKs by customer and location",
     // Same shared TK registry as Packages / TK, Inbound Origin and
     // Outbound Origin (see PackageTrackingContext / STAGE_LIST_PAGES) — a
     // TK only appears here once it's reached "Inbound Warehouse".
@@ -1510,17 +1407,22 @@ const MODULES = {
 
   "/delivery": {
     title: "Delivery",
-    subtitle: "ការដឹកជញ្ជូនដល់ Customer",
-    primaryAction: "ចាត់តាំង Driver",
+    subtitle: "Deliver shipments to customers",
+    primaryAction: "Assign Driver",
     stats: [
-      { icon: "Bike", label: "Out for Delivery", value: "38", tone: "blue" },
+      {
+        icon: "Bike",
+        label: "Out for Delivery",
+        metric: "dlvOut",
+        tone: "blue",
+      },
       {
         icon: "CircleCheck",
-        label: "Delivered (ថ្ងៃនេះ)",
-        value: "212",
+        label: "Delivered",
+        metric: "dlvDone",
         tone: "teal",
       },
-      { icon: "CircleX", label: "Failed", value: "4", tone: "red" },
+      { icon: "CircleX", label: "Failed", metric: "dlvFailed", tone: "red" },
     ],
     columns: [
       col("id", "Delivery ID", { strong: true }),
@@ -1529,38 +1431,21 @@ const MODULES = {
       col("packages", "Packages"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        id: "DLV-2026-04412",
-        customer: "KH-000582 · Sothon Shop",
-        driver: "Vin Sokha",
-        packages: 3,
-        status: "Out for Delivery",
-      },
-      {
-        id: "DLV-2026-04411",
-        customer: "KH-000117 · Dara Trading",
-        driver: "Chan Vibol",
-        packages: 1,
-        status: "Delivered",
-      },
-      {
-        id: "DLV-2026-04410",
-        customer: "KH-000340 · Bopha Import",
-        driver: "Vin Sokha",
-        packages: 2,
-        status: "Failed Delivery",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/customers": {
     title: "Customers",
-    subtitle: "អ្នកប្រើប្រាស់ទាំងអស់ក្នុងប្រព័ន្ធ",
-    primaryAction: "Customer ថ្មី",
+    subtitle: "All users in the system",
+    primaryAction: "New Customer",
     stats: [
-      { icon: "Users", label: "Total Customers", value: "3,214", tone: "ink" },
-      { icon: "UserPlus", label: "New (ខែនេះ)", value: "86", tone: "blue" },
+      { icon: "Users", label: "Total Customers", metric: "total", tone: "ink" },
+      {
+        icon: "UserPlus",
+        label: "New (This Month)",
+        metric: "newThisMonth",
+        tone: "blue",
+      },
     ],
     columns: [
       col("id", "Customer ID", { strong: true }),
@@ -1570,45 +1455,12 @@ const MODULES = {
       col("warehouse", "Default Warehouse"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        id: "KH-000582",
-        name: "Sothon Shop",
-        email: "sothon@shop.com",
-        phone: "+855 12 345 678",
-        warehouse: "CN-GZ-01",
-        status: "Active",
-      },
-      {
-        id: "KH-000117",
-        name: "Dara Trading",
-        email: "dara@trading.com",
-        phone: "+855 92 111 222",
-        warehouse: "CN-YW-01",
-        status: "Active",
-      },
-      {
-        id: "KH-000721",
-        name: "Chenda Mart",
-        email: "chenda@mart.com",
-        phone: "+855 78 555 999",
-        warehouse: "CN-GZ-01",
-        status: "Active",
-      },
-      {
-        id: "KH-000340",
-        name: "Bopha Import",
-        email: "bopha@import.com",
-        phone: "+855 61 222 333",
-        warehouse: "CN-SZ-01",
-        status: "Suspended",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/customer-accounts": {
     title: "Customer Accounts",
-    subtitle: "គណនីចូលប្រើប្រាស់របស់ Customer",
+    subtitle: "Customer login accounts",
     columns: [
       col("id", "Customer ID", { strong: true }),
       col("name", "Name"),
@@ -1616,34 +1468,12 @@ const MODULES = {
       col("registered", "Registered"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        id: "KH-000582",
-        name: "Sothon Shop",
-        email: "sothon@shop.com",
-        registered: "12 Jan 2026",
-        status: "Active",
-      },
-      {
-        id: "KH-000117",
-        name: "Dara Trading",
-        email: "dara@trading.com",
-        registered: "03 Feb 2026",
-        status: "Active",
-      },
-      {
-        id: "KH-000721",
-        name: "Chenda Mart",
-        email: "chenda@mart.com",
-        registered: "19 Mar 2026",
-        status: "Active",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/customer-addresses": {
     title: "Customer Addresses",
-    subtitle: "អាសយដ្ឋាន China Warehouse របស់ Customer នីមួយៗ",
+    subtitle: "Customer China Warehouse addresses",
     columns: [
       col("customer", "Customer", { strong: true }),
       col("warehouse", "Warehouse"),
@@ -1651,35 +1481,13 @@ const MODULES = {
       col("version", "Version"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        customer: "KH-000582 · Sothon Shop",
-        warehouse: "Guangzhou Warehouse",
-        recipient: "Sothon Shop KH-000582",
-        version: "V2",
-        status: "Active",
-      },
-      {
-        customer: "KH-000117 · Dara Trading",
-        warehouse: "Yiwu Warehouse",
-        recipient: "Dara Trading KH-000117",
-        version: "V1",
-        status: "Active",
-      },
-      {
-        customer: "KH-000721 · Chenda Mart",
-        warehouse: "Guangzhou Warehouse",
-        recipient: "Chenda Mart KH-000721",
-        version: "V2",
-        status: "Active",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/customer-transfer": {
     title: "Customer ID Transfer",
-    subtitle: "ផ្ទេរ TK ពី Customer ID មួយទៅមួយទៀត (មិនលុប History)",
-    primaryAction: "Transfer ថ្មី",
+    subtitle: "Transfer TKs between Customer IDs without deleting history",
+    primaryAction: "New Transfer",
     columns: [
       col("tk", "TK Number", {
         strong: true,
@@ -1691,30 +1499,13 @@ const MODULES = {
       col("approvedBy", "Approved By"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        tk: "TK123456789",
-        from: "KH-000582",
-        to: "KH-000721",
-        reason: "Wrong Customer ID",
-        approvedBy: "Supervisor B",
-        status: "Resolved",
-      },
-      {
-        tk: "TK998877665",
-        from: "KH-000340",
-        to: "KH-000117",
-        reason: "Wrong Customer ID",
-        approvedBy: "Supervisor A",
-        status: "Pending",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/warehouses": {
     title: "Warehouses",
-    subtitle: "Warehouse Master — China និង Cambodia",
-    primaryAction: "Warehouse ថ្មី",
+    subtitle: "Warehouse master data — China and Cambodia",
+    primaryAction: "New Warehouse",
     columns: [
       col("id", "Warehouse ID", { strong: true }),
       col("name", "Name"),
@@ -1722,41 +1513,12 @@ const MODULES = {
       col("city", "Province / City"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        id: "CN-GZ-01",
-        name: "Guangzhou Warehouse",
-        country: "China",
-        city: "Guangzhou",
-        status: "Active",
-      },
-      {
-        id: "CN-YW-01",
-        name: "Yiwu Warehouse",
-        country: "China",
-        city: "Yiwu",
-        status: "Active",
-      },
-      {
-        id: "CN-SZ-01",
-        name: "Shenzhen Warehouse",
-        country: "China",
-        city: "Shenzhen",
-        status: "Active",
-      },
-      {
-        id: "KH-PP-01",
-        name: "Phnom Penh Warehouse",
-        country: "Cambodia",
-        city: "Phnom Penh",
-        status: "Active",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/locations": {
     title: "Warehouse Locations",
-    subtitle: "ទីតាំងផ្ទុកទំនិញក្នុងឃ្លាំង",
+    subtitle: "Storage locations inside warehouses",
     columns: [
       col("code", "Location Code", { strong: true }),
       col("warehouse", "Warehouse"),
@@ -1764,66 +1526,25 @@ const MODULES = {
       col("capacity", "Used / Capacity"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        code: "A01-01",
-        warehouse: "KH-PP-01",
-        zone: "A",
-        capacity: "82 / 100",
-        status: "Active",
-      },
-      {
-        code: "A01-02",
-        warehouse: "KH-PP-01",
-        zone: "A",
-        capacity: "45 / 100",
-        status: "Active",
-      },
-      {
-        code: "B02-01",
-        warehouse: "KH-PP-01",
-        zone: "B",
-        capacity: "98 / 100",
-        status: "Active",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/warehouse-operations": {
     title: "Warehouse Operations",
-    subtitle: "កំណត់ត្រាសកម្មភាពប្រតិបត្តិការឃ្លាំង",
+    subtitle: "Warehouse operational activity logs",
     columns: [
       col("action", "Action", { strong: true }),
       col("tk", "TK Number", { linkTo: (row) => `/packages/${row.tk}` }),
       col("staff", "Staff"),
       col("time", "Time"),
     ],
-    rows: [
-      {
-        action: "Scan In",
-        tk: "TK202609250041",
-        staff: "Li Wei",
-        time: "25 Sep, 09:12 AM",
-      },
-      {
-        action: "Move to Location",
-        tk: "TK202609200011",
-        staff: "Vin Sokha",
-        time: "25 Sep, 08:40 AM",
-      },
-      {
-        action: "Scan Out",
-        tk: "TK202609190090",
-        staff: "Chan Vibol",
-        time: "24 Sep, 04:22 PM",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/users": {
     title: "Users",
-    subtitle: "Staff និង Admin ទាំងអស់ក្នុងប្រព័ន្ធ",
-    primaryAction: "User ថ្មី",
+    subtitle: "All staff and admins in the system",
+    primaryAction: "New User",
     columns: [
       col("name", "Name", { strong: true }),
       col("role", "Role"),
@@ -1832,89 +1553,30 @@ const MODULES = {
       col("email", "Email"),
       col("status", "Status", { status: true }),
     ],
-    rows: [
-      {
-        name: "Ou Sothon",
-        role: "Admin",
-        email: "sothon@cargobridge.com",
-        status: "Active",
-      },
-      {
-        name: "Li Wei",
-        role: "China Warehouse Staff",
-        department: "China Warehouse",
-        warehouse_code: "CN-GZ-01",
-        email: "liwei@cargobridge.com",
-        status: "Active",
-      },
-      {
-        name: "Vin Sokha",
-        role: "Delivery Staff",
-        email: "sokha@cargobridge.com",
-        status: "Active",
-      },
-      {
-        name: "Mey Ratha",
-        role: "QC Staff",
-        email: "ratha@cargobridge.com",
-        status: "Suspended",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/status-master": {
     title: "Status Master",
-    subtitle: "និយមន័យ Status ទាំងអស់ក្នុងប្រព័ន្ធ",
+    subtitle: "All status definitions used by the system",
     columns: [
       col("code", "Status Code", { strong: true }),
       col("label", "Label"),
       col("category", "Category"),
     ],
-    rows: [
-      { code: "INBOUND_ORIGIN", label: "Inbound Origin", category: "Package" },
-      {
-        code: "CUSTOMS_PENDING",
-        label: "Customs Pending",
-        category: "Customs",
-      },
-      {
-        code: "OUT_FOR_DELIVERY",
-        label: "Out for Delivery",
-        category: "Delivery",
-      },
-      { code: "DELIVERED", label: "Delivered", category: "Delivery" },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   "/audit-logs": {
     title: "Audit Logs",
-    subtitle: "កំណត់ត្រាសកម្មភាពសំខាន់ៗទាំងអស់ — Who, What, When",
+    subtitle: "Important activity logs — Who, What, When",
     columns: [
       col("action", "Action", { strong: true }),
       col("ref", "Reference"),
       col("by", "By"),
       col("time", "Time"),
     ],
-    rows: [
-      {
-        action: "TRANSFER_CUSTOMER",
-        ref: "TK123456789 · KH-000582 → KH-000721",
-        by: "Staff A",
-        time: "25 Sep 2026, 10:25 AM",
-      },
-      {
-        action: "CUSTOMS_RELEASE",
-        ref: "MSKU1234567",
-        by: "Customs Staff",
-        time: "24 Sep 2026, 03:10 PM",
-      },
-      {
-        action: "DELETE_ADDRESS_V1",
-        ref: "CN-GZ-01 (blocked — versioning)",
-        by: "System",
-        time: "20 Sep 2026, 09:00 AM",
-      },
-    ],
+    rows: [], // live data only — loaded from the server
   },
 
   // Rows come from the real shared package registry (see
@@ -1925,7 +1587,7 @@ const MODULES = {
   "/exceptions": {
     title: "Exception Center",
     subtitle:
-      "TK ទាំងអស់ដែលកំពុងជាប់ Exception (Weight Difference, Missing...)",
+      "All TKs currently in exception (weight difference, missing, etc.)",
     columns: [
       col("tk", "TK Number", {
         strong: true,
@@ -2956,7 +2618,7 @@ function OrderRouteCard({ order, onUpdated }) {
       onUpdated?.({ ...order, ...updated });
       setEditing(false);
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -3040,7 +2702,7 @@ function OrderRouteCard({ order, onUpdated }) {
               onClick={save}
               className="text-sm font-medium bg-signal-blue text-white px-3 py-1.5 rounded-md disabled:opacity-60"
             >
-              {saving ? "កំពុងរក្សាទុក..." : "រក្សាទុក"}
+              {saving ? "កំពុងSave..." : "Save"}
             </button>
             {!(missing && canEdit) && (
               <button
@@ -3048,7 +2710,7 @@ function OrderRouteCard({ order, onUpdated }) {
                 onClick={() => setEditing(false)}
                 className="text-sm text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
               >
-                បោះបង់
+                Cancel
               </button>
             )}
           </div>
@@ -3232,7 +2894,7 @@ async function savePhotos(meta, photos) {
   try {
     await savePhotosLocal(meta, photos);
   } catch (err) {
-    warning = `មិនអាចរក្សាទុករូបភាពក្នុង browser បានទេ: ${err.message}`;
+    warning = `មិនអាចSaveរូបភាពក្នុង browser បានទេ: ${err.message}`;
   }
   if (supabase) {
     try {
@@ -3253,100 +2915,7 @@ async function loadPhotos(tk) {
   return loadPhotosLocal(tk).catch(() => []);
 }
 
-const PACKAGE_DETAILS = {
-  TK202609250041: {
-    tk: "TK202609250041",
-    customer: "Sothon Shop",
-    customerId: "KH-000582",
-    order: "ORD-2026-000125",
-    supplier: "1688 Supplier A",
-    weight: "12.5 KG",
-    dimension: "40 × 30 × 25 CM",
-    cbm: "0.03",
-    warehouse: "CN-GZ-01 · Guangzhou",
-    shipment: "SHP-2026-000125",
-    container: "MSKU1234567",
-    exception: null,
-    timeline: buildTimeline(PACKAGE_STAGES, 3, [
-      "25 Sep, 09:12 AM",
-      "25 Sep, 10:12 AM",
-      "25 Sep, 14:05 PM",
-    ]),
-  },
-  TK202609250038: {
-    tk: "TK202609250038",
-    customer: "Dara Trading",
-    customerId: "KH-000117",
-    order: "ORD-2026-000124",
-    supplier: "Taobao Store B",
-    weight: "4.2 KG",
-    dimension: "22 × 18 × 12 CM",
-    cbm: "0.01",
-    warehouse: "CN-YW-01 · Yiwu",
-    shipment: null,
-    container: null,
-    exception: null,
-    timeline: buildTimeline(PACKAGE_STAGES, 1, [
-      "25 Sep, 09:40 AM",
-      "25 Sep, 10:20 AM",
-    ]),
-  },
-  TK202609250035: {
-    tk: "TK202609250035",
-    customer: "Chenda Mart",
-    customerId: "KH-000721",
-    order: "ORD-2026-000123",
-    supplier: "1688 Supplier D",
-    weight: "8.0 KG",
-    dimension: "35 × 25 × 20 CM",
-    cbm: "0.02",
-    warehouse: "CN-GZ-01 · Guangzhou",
-    shipment: null,
-    container: null,
-    exception: null,
-    timeline: buildTimeline(PACKAGE_STAGES, 0, ["25 Sep, 08:55 AM"]),
-  },
-  TK202609250029: {
-    tk: "TK202609250029",
-    customer: "Sothon Shop",
-    customerId: "KH-000582",
-    order: "ORD-2026-000121",
-    supplier: "JD Supplier E",
-    weight: "15.8 KG",
-    dimension: "45 × 32 × 28 CM",
-    cbm: "0.04",
-    warehouse: "CN-SZ-01 · Shenzhen",
-    shipment: null,
-    container: null,
-    exception: {
-      type: "Weight Difference",
-      detail: "Declared 13.5 KG, actual measured 15.8 KG (+2.3 KG)",
-    },
-    timeline: buildTimeline(PACKAGE_STAGES, 1, [
-      "24 Sep, 03:30 PM",
-      "24 Sep, 04:10 PM",
-    ]),
-  },
-  TK202609250012: {
-    tk: "TK202609250012",
-    customer: "Bopha Import",
-    customerId: "KH-000340",
-    order: "ORD-2026-000119",
-    supplier: "1688 Supplier F",
-    weight: "6.4 KG",
-    dimension: "30 × 20 × 15 CM",
-    cbm: "0.02",
-    warehouse: "CN-GZ-01 · Guangzhou",
-    shipment: "SHP-2026-000124",
-    container: null,
-    exception: null,
-    timeline: buildTimeline(PACKAGE_STAGES, 2, [
-      "23 Sep, 11:05 AM",
-      "23 Sep, 01:40 PM",
-      "24 Sep, 09:00 AM",
-    ]),
-  },
-};
+const PACKAGE_DETAILS = {}; // live data only — nothing hard-coded
 
 // ------------------------------------------------------------
 // lib/usePersistentState.js
@@ -3807,70 +3376,7 @@ function usePackageTracking() {
   return ctx;
 }
 
-const CONTAINER_DETAILS = {
-  MSKU1234567: {
-    no: "MSKU1234567",
-    type: "40HC",
-    seal: "SL908821",
-    shipment: "SHP-2026-000125",
-    route: "Guangzhou → Sihanoukville",
-    packages: 426,
-    weight: "8,240 KG",
-    cbm: "52.6",
-    vessel: "MV Ocean Star · V.221E",
-    timeline: buildTimeline(CONTAINER_STAGES, 6, [
-      "25 Sep, 10:30 AM",
-      "25 Sep, 02:20 PM",
-      "25 Sep, 05:45 PM",
-      "26 Sep, 08:00 AM",
-      "26 Sep, 06:30 PM",
-      "26 Sep, 06:31 PM",
-    ]),
-  },
-  TCLU9988771: {
-    no: "TCLU9988771",
-    type: "20GP",
-    seal: "SL908790",
-    shipment: "SHP-2026-000123",
-    route: "Yiwu → Phnom Penh (Dry Port)",
-    packages: 198,
-    weight: "3,420 KG",
-    cbm: "21.4",
-    vessel: "Truck Convoy · TC-0042",
-    timeline: buildTimeline(CONTAINER_STAGES, 8, [
-      "18 Sep, 09:00 AM",
-      "18 Sep, 11:15 AM",
-      "18 Sep, 03:00 PM",
-      "19 Sep, 07:30 AM",
-      "19 Sep, 08:00 AM",
-      "20 Sep, 02:00 PM",
-      "28 Sep, 10:00 AM",
-      "02 Oct, 09:20 AM",
-    ]),
-  },
-  CMAU4471122: {
-    no: "CMAU4471122",
-    type: "40HC",
-    seal: "SL908650",
-    shipment: "SHP-2026-000121",
-    route: "Shenzhen → Sihanoukville",
-    packages: 380,
-    weight: "7,610 KG",
-    cbm: "48.9",
-    vessel: "MV Mekong Pearl · V.118W",
-    timeline: buildTimeline(CONTAINER_STAGES, 9, [
-      "10 Sep, 09:00 AM",
-      "10 Sep, 01:00 PM",
-      "10 Sep, 04:30 PM",
-      "11 Sep, 07:45 AM",
-      "11 Sep, 07:00 PM",
-      "20 Sep, 06:10 AM",
-      "22 Sep, 10:00 AM",
-      "28 Sep, 03:40 PM",
-      "28 Sep, 04:00 PM",
-    ]),
-  },
-};
+const CONTAINER_DETAILS = {}; // live data only — nothing hard-coded
 
 const ORDER_STAGES = [
   "Order Placed",
@@ -3885,96 +3391,13 @@ const ORDER_STAGES = [
 // `uid` is the numeric account UID shown in the Transfer Order modal
 // (separate from the KH-000xxx Customer ID used elsewhere); swap for a
 // real "orders where id = :id" + "order_items" query later.
-const ORDER_DETAILS = {
-  "ORD-2026-000125": {
-    id: "ORD-2026-000125",
-    uid: "582",
-    customer: "KH-000582 · Sothon Shop",
-    date: "25 Sep 2026",
-    platform: "1688",
-    status: "Processing",
-    products: [
-      { name: "Bluetooth Earbuds Pro", qty: 40, unitPrice: "$6.20" },
-      { name: "USB-C Cable 1m", qty: 120, unitPrice: "$0.85" },
-      { name: "Phone Case (assorted)", qty: 60, unitPrice: "$1.10" },
-    ],
-    shipment: null,
-    container: null,
-    timeline: buildTimeline(ORDER_STAGES, 2, [
-      "25 Sep, 09:00 AM",
-      "25 Sep, 09:20 AM",
-    ]),
-  },
-  "ORD-2026-000124": {
-    id: "ORD-2026-000124",
-    uid: "117",
-    customer: "KH-000117 · Dara Trading",
-    date: "25 Sep 2026",
-    platform: "Taobao",
-    status: "Confirmed",
-    products: [{ name: "Kitchen Scale 5kg", qty: 25, unitPrice: "$3.40" }],
-    shipment: null,
-    container: null,
-    timeline: buildTimeline(ORDER_STAGES, 1, ["25 Sep, 10:40 AM"]),
-  },
-  "ORD-2026-000123": {
-    id: "ORD-2026-000123",
-    uid: "721",
-    customer: "KH-000721 · Chenda Mart",
-    date: "24 Sep 2026",
-    platform: "Tmall",
-    status: "Processing",
-    products: [
-      { name: "LED Strip Light 5m", qty: 80, unitPrice: "$2.75" },
-      { name: "Remote Controller", qty: 80, unitPrice: "$0.60" },
-    ],
-    shipment: null,
-    container: null,
-    timeline: buildTimeline(ORDER_STAGES, 2, [
-      "24 Sep, 08:15 AM",
-      "24 Sep, 09:00 AM",
-    ]),
-  },
-  "ORD-2026-000122": {
-    id: "ORD-2026-000122",
-    uid: "340",
-    customer: "KH-000340 · Bopha Import",
-    date: "24 Sep 2026",
-    platform: "Pinduoduo",
-    status: "Cancelled",
-    products: [{ name: "Travel Backpack 40L", qty: 15, unitPrice: "$9.90" }],
-    shipment: null,
-    container: null,
-    timeline: buildTimeline(ORDER_STAGES, 0, ["24 Sep, 02:00 PM"]),
-  },
-  "ORD-2026-000121": {
-    id: "ORD-2026-000121",
-    uid: "582",
-    customer: "KH-000582 · Sothon Shop",
-    date: "23 Sep 2026",
-    platform: "JD",
-    status: "Confirmed",
-    products: [
-      { name: "Ceramic Mug Set", qty: 50, unitPrice: "$1.95" },
-      { name: "Cutting Board", qty: 30, unitPrice: "$2.30" },
-      { name: "Dish Rack", qty: 10, unitPrice: "$5.10" },
-    ],
-    shipment: "SHP-2026-000124",
-    container: null,
-    timeline: buildTimeline(ORDER_STAGES, 4, [
-      "23 Sep, 10:00 AM",
-      "23 Sep, 10:30 AM",
-      "23 Sep, 04:00 PM",
-      "26 Sep, 08:00 AM",
-    ]),
-  },
-};
+const ORDER_DETAILS = {}; // live data only — nothing hard-coded
 
 // ------------------------------------------------------------
 // lib/customerLookup.js
 // ------------------------------------------------------------
 // Shared "Transfer Type" search used by both the per-Order "Transfer
-// Order" modal and the /customer-transfer "Transfer ថ្មី" modal — look
+// Order" modal and the /customer-transfer "New Transfer" modal — look
 // a customer up by UID (Customer ID), Name, or Phone and get back the
 // same account, so both flows show the same Information card.
 const TRANSFER_TYPES = [
@@ -4192,7 +3615,7 @@ function CustomerPicker({
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="ស្វែងរកតាម ID, ឈ្មោះ ឬលេខទូរស័ព្ទ..."
+            placeholder="Searchតាម ID, ឈ្មោះ ឬPhone number..."
             className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
           />
           {open && query && (loading || results.length > 0 || !strict) && (
@@ -4221,7 +3644,7 @@ function CustomerPicker({
                 <p className="px-3 py-2 text-xs text-ink-600/45">
                   {strict
                     ? "Customer Not Found"
-                    : "រកមិនឃើញ Customer — សូមបង្កើតនៅ Customers page សិន"}
+                    : "Customer not found — សូមបង្កើតនៅ Customers page សិន"}
                 </p>
               )}
             </div>
@@ -4305,7 +3728,7 @@ function OrderPicker({ customer, value, onChange }) {
   if (!customer) {
     return (
       <div className="text-xs text-ink-600/45 border border-dashed border-mist-200 rounded-md px-3 py-2">
-        សូមផ្ទៀងផ្ទាត់ Customer ID សិន ដើម្បីមើល/បង្កើត Order
+        សូមផ្ទៀងផ្ទាត់ Customer ID សិន ដើម្បីមើល/Create Order
       </div>
     );
   }
@@ -4352,7 +3775,7 @@ function OrderPicker({ customer, value, onChange }) {
       setChina("");
       setKh("");
     } catch (err) {
-      setError(err.message || "មិនអាចបង្កើត Order បានទេ");
+      setError(err.message || "មិនអាចCreate Order បានទេ");
     } finally {
       setSaving(false);
     }
@@ -4425,7 +3848,7 @@ function OrderPicker({ customer, value, onChange }) {
               onClick={handleCreateOrder}
               className="text-sm font-medium bg-signal-blue text-white px-3 py-1.5 rounded-md disabled:opacity-60"
             >
-              {saving ? "កំពុងបង្កើត..." : "បង្កើត Order"}
+              {saving ? "កំពុងបង្កើត..." : "Create Order"}
             </button>
             <button
               type="button"
@@ -4436,7 +3859,7 @@ function OrderPicker({ customer, value, onChange }) {
               }}
               className="text-sm text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
             >
-              បោះបង់
+              Cancel
             </button>
           </div>
         </div>
@@ -4470,7 +3893,7 @@ function OrderPicker({ customer, value, onChange }) {
             onClick={startCreating}
             className="w-full text-left border border-dashed border-mist-200 rounded-md px-3 py-2 text-sm text-signal-blue hover:bg-mist-50"
           >
-            + បង្កើត Order ថ្មី
+            + Create New Order
           </button>
         </div>
       )}
@@ -4491,7 +3914,7 @@ function CustomerNotFound({ query }) {
     user?.allowedPaths === "*" ||
     (Array.isArray(user?.allowedPaths) &&
       user.allowedPaths.includes("/customers"));
-  const message = `សូមបង្កើត Customer ថ្មី — Customer ID "${query.trim()}" រកមិនឃើញក្នុងប្រព័ន្ធ (ស្នើដោយ ${
+  const message = `សូមបង្កើត New Customer — Customer ID "${query.trim()}" រកមិនឃើញក្នុងប្រព័ន្ធ (ស្នើដោយ ${
     user?.name || "China Warehouse"
   })`;
 
@@ -4548,7 +3971,7 @@ function PhotoUploader({
   photos,
   setPhotos,
   categories = PHOTO_CATEGORIES,
-  emptyHint = "មិនទាន់មានរូបភាព — ត្រូវការយ៉ាងតិច ១ សន្លឹក",
+  emptyHint = "No images yet — ត្រូវការយ៉ាងតិច ១ សន្លឹក",
 }) {
   const [category, setCategory] = useState(categories[0]);
   const [busy, setBusy] = useState(false);
@@ -4576,7 +3999,7 @@ function PhotoUploader({
       }
       setPhotos((prev) => [...prev, ...added]);
     } catch (err) {
-      setError(err.message || "មិនអាច Upload រូបភាពបានទេ");
+      setError(err.message || "Unable to upload image.");
     } finally {
       setBusy(false);
     }
@@ -4604,7 +4027,7 @@ function PhotoUploader({
           className="flex items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-4 py-2.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60 min-h-[42px]"
         >
           <Icons.Camera size={16} />
-          ថតរូប
+          Take photo
         </button>
         <button
           type="button"
@@ -4640,7 +4063,7 @@ function PhotoUploader({
       </div>
 
       {error && <p className="text-xs text-signal-red">{error}</p>}
-      {busy && <p className="text-xs text-ink-600/50">កំពុងកែច្នៃរូបភាព...</p>}
+      {busy && <p className="text-xs text-ink-600/50">Processing image...</p>}
 
       {photos.length === 0 ? (
         <div className="border border-dashed border-mist-200 rounded-md py-8 flex flex-col items-center text-center">
@@ -4814,7 +4237,7 @@ function CargoCalculator({
           </h4>
           <span className="flex items-center gap-1 text-[11px] text-ink-600/45">
             <Icons.Lock size={12} />
-            គណនាស្វ័យប្រវត្តិ
+            Auto-calculate
           </span>
         </div>
         <InfoGrid
@@ -5053,7 +4476,7 @@ function PhotoGallery({ tk }) {
       ) : photos.length === 0 ? (
         <div className="py-8 flex flex-col items-center text-center">
           <Icons.ImageOff size={30} className="text-ink-600/20 mb-2" />
-          <p className="text-sm text-ink-600/45">TK នេះមិនទាន់មានរូបភាពទេ</p>
+          <p className="text-sm text-ink-600/45">TK នេះNo images yetទេ</p>
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3">
@@ -5116,7 +4539,7 @@ function PhotoGallery({ tk }) {
                 onClick={() => setActiveIdx((i) => i - 1)}
                 className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
               >
-                មុន
+                Previous
               </button>
               <button
                 type="button"
@@ -5124,7 +4547,7 @@ function PhotoGallery({ tk }) {
                 onClick={() => setActiveIdx((i) => i + 1)}
                 className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
               >
-                បន្ទាប់
+                Next
               </button>
             </div>
           </div>
@@ -5185,7 +4608,7 @@ function StatusHistoryCard({ pkg, timeline }) {
       setStatus("");
       setRemark("");
     } catch (err) {
-      setError(err.message || "មិនអាច Update បានទេ");
+      setError(err.message || "Unable to update.");
     } finally {
       setBusy(false);
     }
@@ -5239,7 +4662,7 @@ function StatusHistoryCard({ pkg, timeline }) {
       )}
 
       {rows.length === 0 ? (
-        <p className="text-sm text-ink-600/45">មិនទាន់មាន History ទេ</p>
+        <p className="text-sm text-ink-600/45">No history yet.</p>
       ) : (
         <ol className="divide-y divide-mist-100">
           {rows.map((r, i) => (
@@ -5291,7 +4714,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
             onChange={set("inbound")}
             className={INPUT_CLS}
           >
-            <option value="">ទាំងអស់</option>
+            <option value="">All</option>
             {INBOUND_STATUSES.map((s) => (
               <option key={s}>{s}</option>
             ))}
@@ -5304,7 +4727,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
             onChange={set("outbound")}
             className={INPUT_CLS}
           >
-            <option value="">ទាំងអស់</option>
+            <option value="">All</option>
             {outboundOptions.map((s) => (
               <option key={s}>{s}</option>
             ))}
@@ -5317,7 +4740,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
             onChange={set("cargo")}
             className={INPUT_CLS}
           >
-            <option value="">ទាំងអស់</option>
+            <option value="">All</option>
             {CARGO_TYPES.map((s) => (
               <option key={s}>{s}</option>
             ))}
@@ -5326,7 +4749,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
         <div>
           <label className={LABEL_CLS}>Size</label>
           <select value={adv.size} onChange={set("size")} className={INPUT_CLS}>
-            <option value="">ទាំងអស់</option>
+            <option value="">All</option>
             {SIZE_CHOICES.map((s) => (
               <option key={s} value={s}>
                 {s === "OVER" ? "> L (CBM)" : s}
@@ -5341,7 +4764,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
             onChange={set("warehouse")}
             className={INPUT_CLS}
           >
-            <option value="">ទាំងអស់</option>
+            <option value="">All</option>
             {warehouses.map((s) => (
               <option key={s}>{s}</option>
             ))}
@@ -5371,7 +4794,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
             onClick={() => setAdv(EMPTY_ADV)}
             className="w-full text-sm text-ink-700 border border-mist-200 bg-white px-3 py-2 rounded-md hover:bg-mist-50"
           >
-            សម្អាតតម្រង
+            Clear filters
           </button>
         </div>
       </div>
@@ -5382,7 +4805,7 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
 // ------------------------------------------------------------
 // components/CreatePackageModal.jsx
 // ------------------------------------------------------------
-// New TK / Inbound Origin — used by both "Packages / TK" (TK ថ្មី) and
+// New TK / Inbound Origin — used by both "Packages / TK" (New TK) and
 // "Inbound Origin" (Scan TK). Flow: scan/enter TK → verify Customer ID
 // (must already exist) → pick/create Order (THN######) → product +
 // photos → cargo type & size or CBM → automatic freight → Save Inbound.
@@ -5427,7 +4850,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
   const { rows: whList } = useWarehouses();
 
   // Read-only preview of the NEW Order ID this inbound will get. Refreshed
-  // every time the form opens and after every save ("Scan TK បន្ទាប់").
+  // every time the form opens and after every save ("Scan TK Next").
   const [orderPreview, setOrderPreview] = useState("");
   const [formKey, setFormKey] = useState(0);
   useEffect(() => {
@@ -5520,7 +4943,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
       f.packageCount !== "" &&
       !(Number.isInteger(Number(f.packageCount)) && Number(f.packageCount) >= 1)
     )
-      return setError("ចំនួនកញ្ចប់ត្រូវតែជាចំនួនគត់ ចាប់ពី 1 ឡើង");
+      return setError("ចំនួនPackageត្រូវតែជាចំនួនគត់ ចាប់ពី 1 ឡើង");
     if (!calc.ok) return setError(calc.message);
     if (override.on && !(override.value !== "" && overrideNum >= 0))
       return setError("តម្លៃ Override មិនត្រឹមត្រូវ");
@@ -5553,7 +4976,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
         height_cm: dimsEntered ? Number(f.height) : null,
         weight_kg: f.weight !== "" ? Number(f.weight) : null,
         weight: f.weight !== "" ? `${Number(f.weight)} KG` : "",
-        // ចំនួនកញ្ចប់ក្នុង TK នេះ (ទំនិញជាឈុត) — ផ្ញើតែពេល > 1 ដើម្បីមិនបាក់ DB ដែលមិនទាន់មាន column
+        // ចំនួនPackageក្នុង TK នេះ (ទំនិញជាឈុត) — ផ្ញើតែពេល > 1 ដើម្បីមិនបាក់ DB ដែលមិនទាន់មាន column
         ...(Number(f.packageCount) > 1
           ? { package_count: Math.floor(Number(f.packageCount)) }
           : {}),
@@ -5591,7 +5014,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
     } catch (err) {
       // TK not saved → don't leave an empty Order behind.
       if (!saved) await rollbackNewOrder(newOrder);
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -5617,7 +5040,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
             <Check size={15} strokeWidth={3} />
           </span>
           <h3 className="font-display font-bold text-base text-ink-900">
-            Inbound បានរក្សាទុក
+            Inbound បានSave
           </h3>
         </div>
         <div className="p-5 space-y-4">
@@ -5647,14 +5070,14 @@ function CreatePackageModal({ open, onClose, onCreated }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2.5 rounded-md hover:bg-mist-50"
           >
-            បិទ
+            Close
           </button>
           <button
             type="button"
             onClick={resetForNext}
             className="text-sm font-medium bg-white border border-mist-200 text-ink-700 px-3.5 py-2.5 rounded-md hover:bg-mist-50"
           >
-            Scan TK បន្ទាប់
+            Scan TK Next
           </button>
           <button
             type="button"
@@ -5779,7 +5202,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
           </div>
           <div>
             <label className={LABEL_CLS}>
-              ចំនួនកញ្ចប់ក្នុង TK (Package Qty)
+              ចំនួនPackageក្នុង TK (Package Qty)
             </label>
             <input
               type="number"
@@ -5793,7 +5216,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
               placeholder="1"
             />
             <p className="text-[11px] text-ink-600/50 mt-1">
-              ទំនិញជាឈុត មាន 2 កញ្ចប់ឡើងទៅ → ស្លាក Print បាន 1/2, 2/2 …
+              ទំនិញជាឈុត មាន 2 Packageឡើងទៅ → ស្លាក Print បាន 1/2, 2/2 …
             </p>
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
@@ -5866,7 +5289,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
           onClick={onClose}
           className="text-sm font-medium text-ink-700 px-3.5 py-2.5 rounded-md hover:bg-mist-50"
         >
-          បោះបង់
+          Cancel
         </button>
         <button
           type="submit"
@@ -5874,7 +5297,7 @@ function CreatePackageModal({ open, onClose, onCreated }) {
           className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-4 py-2.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60 min-h-[42px]"
         >
           <Save size={15} />
-          {saving ? "កំពុងរក្សាទុក..." : "Save Inbound"}
+          {saving ? "កំពុងSave..." : "Save Inbound"}
         </button>
       </div>
     </form>,
@@ -5978,7 +5401,7 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
       }
       setCreating(false);
     } catch (err) {
-      setError(err.message || "មិនអាចបង្កើត Shipment បានទេ");
+      setError(err.message || "មិនអាចCreate Shipment បានទេ");
     } finally {
       setSaving(false);
     }
@@ -6024,14 +5447,14 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
               onClick={handleCreateShipment}
               className="text-sm font-medium bg-signal-blue text-white px-3 py-1.5 rounded-md disabled:opacity-60"
             >
-              {saving ? "កំពុងបង្កើត..." : "បង្កើត Shipment"}
+              {saving ? "កំពុងបង្កើត..." : "Create Shipment"}
             </button>
             <button
               type="button"
               onClick={() => setCreating(false)}
               className="text-sm text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
             >
-              បោះបង់
+              Cancel
             </button>
           </div>
         </div>
@@ -6044,7 +5467,7 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="ស្វែងរក Shipment No / Route..."
+            placeholder="Search Shipment No / Route..."
             className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
           />
           {open && (
@@ -6074,7 +5497,7 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
                 ))
               ) : (
                 <p className="px-3 py-2 text-xs text-ink-600/45">
-                  រកមិនឃើញ Shipment
+                  No shipment found
                 </p>
               )}
               {allowCreate && (
@@ -6086,150 +5509,13 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
                   }}
                   className="w-full text-left px-3 py-2 text-sm text-signal-blue border-t border-mist-200 hover:bg-mist-50"
                 >
-                  + បង្កើត Shipment ថ្មី
+                  + Create Shipment ថ្មី
                 </button>
               )}
             </div>
           )}
         </>
       )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------
-// components/CreateOutboundModal.jsx
-// ------------------------------------------------------------
-// Dedicated Outbound Origin scan form — replaces the generic
-// CreateRowModal so a scan can assign the TK to a real Shipment
-// (packages.shipment_id) via ShipmentPicker, not just a free-text field.
-// Persistence (history row + package status/shipment_id update) still
-// goes through ListPage's addLinkedRow — this only collects the values.
-function CreateOutboundModal({ open, onClose, onSubmit, initialTk = "" }) {
-  const { findPackage } = usePackageTracking();
-  const [tk, setTk] = useState("");
-  const [method, setMethod] = useState("Sea");
-  const [container, setContainer] = useState("");
-  const [shipment, setShipment] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (open) {
-      setTk(initialTk);
-      setMethod("Sea");
-      setContainer("");
-      setShipment(null);
-      setError("");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialTk]);
-
-  if (!open) return null;
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError("");
-    const trimmed = tk.trim();
-    if (!trimmed) return setError("សូមបញ្ចូល TK Number");
-    if (!findPackage(trimmed))
-      return setError(
-        `រកមិនឃើញ TK "${trimmed}" ទេ — សូមបង្កើត TK នៅ Packages / TK សិន`,
-      );
-    if (!container.trim())
-      return setError("Container Number ត្រូវការ ដើម្បីចេញ Outbound Origin");
-    if (!shipment) return setError("សូមជ្រើសរើស ឬបង្កើត Shipment");
-    setSaving(true);
-    try {
-      await onSubmit({
-        tk: trimmed,
-        method,
-        container_no: container.trim().toUpperCase(),
-        shipment_id: String(shipment.id).startsWith("local-")
-          ? null
-          : shipment.id,
-      });
-      onClose();
-    } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
-    >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            Scan TK — Outbound Origin
-          </h3>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              TK Number <span className="text-signal-red">*</span>
-            </label>
-            <input
-              value={tk}
-              onChange={(e) => setTk(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-              placeholder="TK202609250041"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Shipping Method
-            </label>
-            <input
-              value={method}
-              onChange={(e) => setMethod(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Container Number <span className="text-signal-red">*</span>
-            </label>
-            <input
-              value={container}
-              onChange={(e) => setContainer(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-              placeholder="CNT20260928001"
-            />
-          </div>
-          <ShipmentPicker value={shipment} onChange={setShipment} allowCreate />
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            បោះបង់
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងរក្សាទុក..." : "Move to Outbound"}
-          </button>
-        </div>
-      </form>
     </div>
   );
 }
@@ -6301,7 +5587,7 @@ function CreateArrivalModal({ open, onClose, onCreated }) {
       onCreated?.(data);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -6363,14 +5649,14 @@ function CreateArrivalModal({ open, onClose, onCreated }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
           >
-            {saving ? "កំពុងរក្សាទុក..." : "រក្សាទុក"}
+            {saving ? "កំពុងSave..." : "Save"}
           </button>
         </div>
       </form>
@@ -6467,7 +5753,7 @@ function TransferAccountLookup({
           <p className="text-xs text-ink-600/45">
             {query
               ? "រកមិនឃើញគណនីនេះទេ — សូមពិនិត្យម្តងទៀត"
-              : "សូមវាយបញ្ចូល UID, ឈ្មោះ ឬលេខទូរស័ព្ទ ដើម្បីស្វែងរកគណនី"}
+              : "សូមវាយបញ្ចូល UID, ឈ្មោះ ឬPhone number ដើម្បីSearchគណនី"}
           </p>
         )}
         {matched && !loading && noteText && (
@@ -6617,7 +5903,7 @@ function VerifyScanModal({
         return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
       if (!calc.ok) return setError(calc.message);
       if (!String(dims.reason).trim())
-        return setError("សូមបញ្ចូលមូលហេតុនៃការកែ (Reason)");
+        return setError("សូមបញ្ចូលReason for adjustment (Reason)");
     }
     setSaving(true);
     try {
@@ -6690,7 +5976,7 @@ function VerifyScanModal({
       });
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចបញ្ជាក់បានទេ");
+      setError(err.message || "Unable to confirm.");
     } finally {
       setSaving(false);
     }
@@ -6829,7 +6115,7 @@ function VerifyScanModal({
                   onClick={() => setEdit((v) => !v)}
                   className="text-xs font-medium text-signal-blue border border-mist-200 bg-white px-2.5 py-1 rounded-md hover:bg-mist-50"
                 >
-                  {edit ? "បោះបង់ការកែ" : "កែ Size / Weight"}
+                  {edit ? "Cancel changes" : "Adjust Size / Weight"}
                 </button>
               </div>
               {edit && (
@@ -6898,7 +6184,7 @@ function VerifyScanModal({
                     </div>
                   </div>
                   <div>
-                    <label className={LABEL_CLS}>មូលហេតុនៃការកែ *</label>
+                    <label className={LABEL_CLS}>Reason for adjustment *</label>
                     <input
                       value={dims.reason}
                       onChange={(e) =>
@@ -6916,7 +6202,7 @@ function VerifyScanModal({
                         Freight ថ្មី:{" "}
                         <b>
                           {pkg.freight_overridden
-                            ? `${money(pkg.freight_fee)} (Override — រក្សាទុក)`
+                            ? `${money(pkg.freight_fee)} (Override — Save)`
                             : money(calc.fee)}
                         </b>
                       </>
@@ -6998,9 +6284,293 @@ function VerifyScanModal({
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
           >
             <Check size={14} />
-            {saving ? "កំពុងបញ្ជាក់..." : edit ? "Save & Confirm" : "Confirm"}
+            {saving ? "Confirming..." : edit ? "Save & Confirm" : "Confirm"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// components/TkScanField.jsx  (+ useScanFeedback hook)
+// ------------------------------------------------------------
+// Warehouse-style scan input shared by every "scan a TK" box. UI only —
+// it never decides whether a TK is valid; the page calls scan.begin() /
+// scan.succeed() / scan.fail() with the result of its own (unchanged)
+// validation, and this component just animates it:
+//   idle → scanning (blue glow, pulsing icon, sweeping scan line)
+//        → success  (green glow, icon morphs into a drawn checkmark)
+//        → error    (red state, short shake, clear message)
+// After success/error the input is re-focused (and on error the old text
+// is selected so the next scan simply overwrites it), which keeps
+// back-to-back barcode/QR scanning hands-free. Colours come from
+// currentColor, so they follow the signal-blue/teal/red theme tokens.
+// All motion is 200–350ms and is switched off for reduced-motion users.
+const SCAN_CSS = `
+.cb-scan {
+  position: relative;
+  overflow: hidden;
+  transition: border-color .2s ease, box-shadow .2s ease,
+    background-color .2s ease, color .2s ease;
+}
+.cb-scan--scanning {
+  border-color: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+}
+.cb-scan--success {
+  border-color: currentColor;
+  background-color: color-mix(in srgb, currentColor 5%, white);
+  animation: cb-scan-glow .35s ease-out both;
+}
+.cb-scan--error {
+  border-color: currentColor;
+  background-color: color-mix(in srgb, currentColor 5%, white);
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
+}
+.cb-scan--error.cb-scan-shake-a { animation: cb-scan-shake-a .3s ease-in-out both; }
+.cb-scan--error.cb-scan-shake-b { animation: cb-scan-shake-b .3s ease-in-out both; }
+
+/* sweeping scan line (only visible while scanning) */
+.cb-scan__line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease;
+  background: linear-gradient(
+    90deg,
+    transparent 38%,
+    color-mix(in srgb, currentColor 20%, transparent) 48.5%,
+    currentColor 50%,
+    color-mix(in srgb, currentColor 20%, transparent) 51.5%,
+    transparent 62%
+  );
+}
+.cb-scan--scanning .cb-scan__line {
+  opacity: .55;
+  animation: cb-scan-sweep .35s ease-in-out infinite;
+}
+
+/* icon stack: scanner → check / alert */
+.cb-scan__icon { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
+.cb-scan__icon > * {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(.6);
+  transition: opacity .2s ease, transform .25s cubic-bezier(.34,1.4,.64,1);
+}
+.cb-scan--idle .cb-ico-scan { opacity: .4; transform: none; }
+.cb-scan--scanning .cb-ico-scan {
+  opacity: 1; transform: none;
+  animation: cb-scan-pulse .7s ease-in-out infinite;
+}
+.cb-scan--success .cb-ico-check { opacity: 1; transform: none; }
+.cb-scan--success .cb-ico-check path {
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: cb-scan-draw .28s .08s ease-out forwards;
+}
+.cb-scan--error .cb-ico-err { opacity: 1; transform: none; }
+
+.cb-scan-msg { animation: cb-scan-msg .2s ease-out both; }
+.cb-scan-row-in {
+  animation: cb-scan-row-in .3s cubic-bezier(.2,.8,.2,1) both,
+    cb-scan-row-flash .9s ease-out both;
+}
+
+@keyframes cb-scan-sweep { from { transform: translateX(-50%); } to { transform: translateX(50%); } }
+@keyframes cb-scan-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.85); opacity: .6; } }
+@keyframes cb-scan-glow {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 35%, transparent); }
+  60%  { box-shadow: 0 0 0 7px color-mix(in srgb, currentColor 18%, transparent); }
+  100% { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent); }
+}
+@keyframes cb-scan-shake-a { 0%,100% { transform: none; } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(3px); } }
+@keyframes cb-scan-shake-b { 0%,100% { transform: none; } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(3px); } }
+@keyframes cb-scan-draw { to { stroke-dashoffset: 0; } }
+@keyframes cb-scan-msg { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes cb-scan-row-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes cb-scan-row-flash { from { background-color: rgba(20,184,166,.14); } to { background-color: transparent; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .cb-scan, .cb-scan *, .cb-scan-msg, .cb-scan-row-in { animation: none !important; transition: none !important; }
+}
+`;
+
+// How long the green success state is held before going back to idle.
+const SCAN_SUCCESS_HOLD_MS = 1100;
+// Pause between the success animation and the Verify modal opening, so the
+// operator actually sees the green check before the modal covers it.
+// Set to 0 to open the modal instantly like before.
+const SCAN_SUCCESS_DELAY_MS = 380;
+
+function useScanFeedback() {
+  const [phase, setPhase] = useState("idle"); // idle | scanning | success | error
+  const [message, setMessage] = useState("");
+  const [shakeKey, setShakeKey] = useState(0);
+  const inputRef = useRef(null);
+  const timerRef = useRef(null);
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  function focusInput(selectText = false) {
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      if (selectText) el.select();
+    }, 40);
+  }
+  function begin() {
+    clearTimeout(timerRef.current);
+    setPhase("scanning");
+    setMessage("");
+  }
+  function reset() {
+    clearTimeout(timerRef.current);
+    setPhase("idle");
+    setMessage("");
+  }
+  function succeed(text = "") {
+    clearTimeout(timerRef.current);
+    setPhase("success");
+    setMessage(text);
+    timerRef.current = setTimeout(() => {
+      setPhase("idle");
+      setMessage("");
+    }, SCAN_SUCCESS_HOLD_MS);
+    focusInput(false);
+  }
+  // Errors stay on screen until the next scan starts (a busy operator may
+  // look away for a moment), and the bad text is selected for overwrite.
+  function fail(text, refocus = true) {
+    clearTimeout(timerRef.current);
+    setPhase("error");
+    setMessage(text);
+    setShakeKey((k) => k + 1);
+    if (refocus) focusInput(true);
+  }
+  // Call from the input's onChange with the new value.
+  function onInput(value) {
+    if (value.trim()) begin();
+    else reset();
+  }
+
+  return {
+    phase,
+    message,
+    shakeKey,
+    inputRef,
+    focusInput,
+    begin,
+    reset,
+    succeed,
+    fail,
+    onInput,
+  };
+}
+
+const SCAN_PHASE_LABEL = {
+  idle: "Ready to scan",
+  scanning: "Scanning…",
+  success: "Verified",
+  error: "Failed",
+};
+
+function TkScanField({
+  label = "Scan Tracking Number",
+  value,
+  onChange,
+  placeholder,
+  scan,
+}) {
+  const { phase, message, shakeKey, inputRef } = scan;
+  const tone =
+    phase === "scanning"
+      ? "text-signal-blue"
+      : phase === "success"
+        ? "text-signal-teal"
+        : phase === "error"
+          ? "text-signal-red"
+          : "text-ink-600";
+  const shake =
+    phase === "error"
+      ? shakeKey % 2
+        ? "cb-scan-shake-a"
+        : "cb-scan-shake-b"
+      : "";
+
+  return (
+    <div className="space-y-1.5">
+      <style>{SCAN_CSS}</style>
+      <div className="flex items-center justify-between">
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
+          {label}
+        </label>
+        <span
+          className={`text-[11px] font-medium transition-colors duration-200 ${tone} ${
+            phase === "idle" ? "opacity-50" : ""
+          }`}
+        >
+          {SCAN_PHASE_LABEL[phase]}
+        </span>
+      </div>
+      <div
+        className={`cb-scan cb-scan--${phase} ${shake} ${tone} flex items-center gap-2.5 bg-white border border-mist-200 rounded-md px-3 py-2.5 focus-within:border-signal-blue`}
+      >
+        <span className="cb-scan__icon" aria-hidden="true">
+          <Icons.ScanLine className="cb-ico-scan" size={18} />
+          <svg
+            className="cb-ico-check"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="9.5" strokeOpacity=".35" />
+            <path d="M7.5 12.5l3 3 6-6.5" pathLength="1" />
+          </svg>
+          <Icons.TriangleAlert className="cb-ico-err" size={18} />
+        </span>
+        <input
+          ref={inputRef}
+          autoFocus
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 min-w-0 outline-none text-[15px] font-medium tracking-wide text-ink-900 bg-transparent placeholder:font-normal placeholder:tracking-normal"
+        />
+        <span className="cb-scan__line" aria-hidden="true" />
+      </div>
+      {/* Fixed-height message slot so the cards below never jump while scanning. */}
+      <div className="min-h-[38px] pt-1.5" aria-live="polite">
+        {message && (
+          <div
+            key={`${phase}-${shakeKey}-${message}`}
+            className={`cb-scan-msg flex items-center gap-2 text-sm rounded-md px-3 py-2 ${
+              phase === "error"
+                ? "text-signal-red bg-signal-red/10"
+                : "text-signal-teal bg-signal-teal/10"
+            }`}
+          >
+            {phase === "error" ? (
+              <TriangleAlert size={14} className="shrink-0" />
+            ) : (
+              <Check size={14} className="shrink-0" />
+            )}
+            {message}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -7037,11 +6607,20 @@ function ScanConfirmPage({
   const [tab, setTab] = useState("scan");
   const [tkInput, setTkInput] = useState("");
   const [queue, setQueue] = useState([]);
-  const [error, setError] = useState("");
   const [verifyTk, setVerifyTk] = useState(null);
   const [updatingTk, setUpdatingTk] = useState(null);
   const [rowError, setRowError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const scan = useScanFeedback();
+  const verifyTimer = useRef(null);
+  const debounceTimer = useRef(null);
+  useEffect(
+    () => () => {
+      clearTimeout(verifyTimer.current);
+      clearTimeout(debounceTimer.current);
+    },
+    [],
+  );
 
   const doneRows = packages.filter((p) => p.status === toStatus);
   const queueRows = queue.map((tk) => findPackage(tk)).filter(Boolean);
@@ -7067,16 +6646,15 @@ function ScanConfirmPage({
   // Runs the same lookup/validate/queue logic as handleScan below, but
   // callable from anywhere (Enter key or auto-scan) with a plain value.
   function processScan(rawValue) {
-    setError("");
     const trimmed = rawValue.trim();
     if (!trimmed) return;
     const pkg = findPackage(trimmed);
     if (!pkg) {
-      setError(`រកមិនឃើញ TK "${trimmed}" ទេ`);
+      scan.fail(`TK not found "${trimmed}" ទេ`);
       return;
     }
     if (pkg.status !== fromStatus) {
-      setError(
+      scan.fail(
         pkg.status === toStatus
           ? `TK "${trimmed}" ${alreadyDoneMessage}`
           : `TK "${trimmed}" មិនទាន់ ${fromStatus} ទេ (Status: ${pkg.status})`,
@@ -7084,18 +6662,27 @@ function ScanConfirmPage({
       return;
     }
     if (queue.some((t) => t.toLowerCase() === trimmed.toLowerCase())) {
-      setError(`TK "${trimmed}" ស្កែនរួចហើយ ខាងក្រោម`);
+      scan.fail(`TK "${trimmed}" ស្កែនរួចហើយ ខាងក្រោម`);
       return;
     }
     setQueue((q) => [...q, pkg.tk]);
     setTkInput("");
+    scan.succeed(`${pkg.tk} — ស្កែនជោគជ័យ`);
     // Match the real system: a valid scan pops the Verify screen straight
-    // away instead of waiting for a manual "Verify" click.
-    setVerifyTk(pkg.tk);
+    // away instead of waiting for a manual "Verify" click — just after a
+    // short beat so the green success animation is visible first.
+    clearTimeout(verifyTimer.current);
+    verifyTimer.current = setTimeout(
+      () => setVerifyTk(pkg.tk),
+      SCAN_SUCCESS_DELAY_MS,
+    );
   }
 
   function handleScan(e) {
     e.preventDefault();
+    // Enter handles the scan right now — cancel the pending auto-fire so
+    // the same TK isn't processed twice.
+    clearTimeout(debounceTimer.current);
     processScan(tkInput);
   }
 
@@ -7107,8 +6694,8 @@ function ScanConfirmPage({
   useEffect(() => {
     const trimmed = tkInput.trim();
     if (!trimmed) return;
-    const timer = setTimeout(() => processScan(trimmed), 250);
-    return () => clearTimeout(timer);
+    debounceTimer.current = setTimeout(() => processScan(trimmed), 250);
+    return () => clearTimeout(debounceTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tkInput]);
 
@@ -7176,7 +6763,7 @@ function ScanConfirmPage({
       </div>
 
       {tab === "listing" ? (
-        <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+        <div className="cb-surface cb-card">
           {rowError && (
             <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2 m-4 mb-0">
               <TriangleAlert size={14} className="shrink-0" />
@@ -7225,33 +6812,20 @@ function ScanConfirmPage({
       ) : (
         <>
           <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-            <form onSubmit={handleScan} className="space-y-1.5">
-              <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
-                Scan Tracking Number
-              </label>
-              <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 focus-within:border-signal-blue">
-                <Icons.ScanLine
-                  size={16}
-                  className="text-ink-600/40 shrink-0"
-                />
-                <input
-                  autoFocus
-                  value={tkInput}
-                  onChange={(e) => setTkInput(e.target.value)}
-                  placeholder={scanPlaceholder}
-                  className="flex-1 outline-none text-sm bg-transparent"
-                />
-              </div>
+            <form onSubmit={handleScan}>
+              <TkScanField
+                value={tkInput}
+                onChange={(v) => {
+                  setTkInput(v);
+                  scan.onInput(v);
+                }}
+                placeholder={scanPlaceholder}
+                scan={scan}
+              />
             </form>
-            {error && (
-              <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2 mt-3">
-                <TriangleAlert size={14} className="shrink-0" />
-                {error}
-              </div>
-            )}
           </div>
 
-          <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+          <div className="cb-surface cb-card">
             <div className="flex items-center gap-2 px-4 lg:px-5 py-3.5 border-b border-mist-200">
               <h2 className="text-sm font-semibold text-ink-900">
                 Order and package size listing
@@ -7275,7 +6849,7 @@ function ScanConfirmPage({
                 {queueRows.map((row) => (
                   <div
                     key={row.tk}
-                    className="flex items-center justify-between gap-4 px-4 lg:px-5 py-3"
+                    className="cb-scan-row-in flex items-center justify-between gap-4 px-4 lg:px-5 py-3"
                   >
                     <div className="min-w-0">
                       <Link
@@ -7320,8 +6894,12 @@ function ScanConfirmPage({
         title={modalTitle}
         targetStatus={toStatus}
         allowRemeasure={allowRemeasure}
-        onClose={() => setVerifyTk(null)}
+        onClose={() => {
+          setVerifyTk(null);
+          scan.focusInput();
+        }}
         onConfirmed={(tk, info) => {
+          scan.focusInput();
           removeFromQueue(tk);
           if (toStatus === "Arrived Destination")
             setNotice({ tk, ...info, at: formatNowTimestamp() });
@@ -7386,7 +6964,7 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
       await onSave({ ...v, type }, existing);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -7449,14 +7027,14 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
             className="bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
           >
-            {saving ? "កំពុងរក្សាទុក..." : "រក្សាទុក"}
+            {saving ? "កំពុងSave..." : "Save"}
           </button>
         </div>
       </form>
@@ -7501,7 +7079,7 @@ function AssignedCustomers({ kind, wh, canManage }) {
       setPicked(null);
       await load();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setBusy(false);
     }
@@ -7860,7 +7438,7 @@ function WarehouseManagementPage() {
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90"
           >
             <Plus size={14} />
-            {tab === "china" ? "China Warehouse ថ្មី" : "Cambodia Branch ថ្មី"}
+            {tab === "china" ? "China New Warehouse" : "Cambodia Branch ថ្មី"}
           </button>
         )}
       </div>
@@ -7883,7 +7461,7 @@ function WarehouseManagementPage() {
         </div>
       )}
 
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+      <div className="cb-surface cb-card">
         <div className="flex items-center justify-between gap-3 flex-wrap px-4 lg:px-5 pt-3 border-b border-mist-200">
           <div className="flex gap-1">
             {[
@@ -7912,7 +7490,7 @@ function WarehouseManagementPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="ស្វែងរក Code, Name, Province..."
+              placeholder="Search Code, Name, Province..."
               className="outline-none text-sm bg-transparent w-56"
             />
           </div>
@@ -8080,7 +7658,7 @@ function KhWarehousePage() {
         </div>
       )}
 
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+      <div className="cb-surface cb-card">
         <div className="flex items-center justify-between gap-3 flex-wrap px-4 lg:px-5 py-3 border-b border-mist-200">
           <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-1.5 focus-within:border-signal-blue">
             <Search size={14} className="text-ink-600/40" />
@@ -8125,7 +7703,7 @@ function KhWarehousePage() {
 // ------------------------------------------------------------
 // "W.H Arrived (Destination)" — Scan Arrive V2. A TK must already be at
 // "Outbound Origin" (scanned out from the China warehouse — see
-// CreateOutboundModal) before it can arrive here; scanning it queues it
+// QuickOutboundScan) before it can arrive here; scanning it queues it
 // below, and Verify -> Confirm moves it to "Arrived Destination" (the
 // same status CreateArrivalModal sets in bulk by Shipment). This is a
 // per-TK alternative to that bulk flow, not a replacement for it.
@@ -8221,7 +7799,7 @@ function TransferOrderModal({ open, order, onClose, onTransferred }) {
       onTransferred(toLabel);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាច Transfer បានទេ");
+      setError(err.message || "Unable to transfer.");
     } finally {
       setSaving(false);
     }
@@ -8267,12 +7845,13 @@ function TransferOrderModal({ open, order, onClose, onTransferred }) {
             onQueryChange={setQuery}
             matched={matched}
             loading={loading}
-            noteText="ការបញ្ជាទិញនេះឈានដល់ស្ថានភាព arrived destination។ បើអ្នកបានផ្ទេរវាទៅ User ផ្សេង សូម print ស្លាកកញ្ចប់ (order sticker) ម្តងទៀត។"
+            noteText="ការបញ្ជាទិញនេះឈានដល់ស្ថានភាព arrived destination។ បើអ្នកបានផ្ទេរវាទៅ User ផ្សេង សូម print ស្លាកPackage (order sticker) ម្តងទៀត។"
           />
 
           {matched && sameCustomer && (
             <p className="text-xs text-signal-red">
-              Customer នេះជា Customer ដដែលរួចហើយ — សូមជ្រើសរើសផ្សេង
+              This is already the same customer — please choose a different
+              customer.
             </p>
           )}
         </div>
@@ -8293,7 +7872,7 @@ function TransferOrderModal({ open, order, onClose, onTransferred }) {
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save size={14} />
-            {saving ? "កំពុង Transfer..." : "Save"}
+            {saving ? "Transferring..." : "Save"}
           </button>
         </div>
       </div>
@@ -8462,7 +8041,7 @@ function DataTable({
                 colSpan={columns.length + (rowActions ? 1 : 0)}
                 className="px-4 py-10 text-center text-ink-600/40 text-sm"
               >
-                មិនមានទិន្នន័យទេ
+                No data available.
               </td>
             </tr>
           )}
@@ -8632,7 +8211,7 @@ const TONES = {
 function StatCard({ icon, label, value, unit, tone = "ink", delta }) {
   const Icon = Icons[icon] || Icons.Circle;
   return (
-    <div className="bg-white border border-mist-200 rounded-md p-4 shadow-panel">
+    <div className="cb-surface cb-card cb-stat p-4 shadow-panel">
       <div className="flex items-start justify-between">
         <div
           className={`w-9 h-9 rounded-sm flex items-center justify-center ${TONES[tone]}`}
@@ -8705,14 +8284,14 @@ function RouteFlow() {
   const activeCount = counts[activeLabel];
 
   return (
-    <div className="bg-ink-900 rounded-md p-5 lg:p-6 overflow-x-auto">
+    <div className="cb-route p-5 lg:p-6 overflow-x-auto">
       <div className="flex items-center justify-between mb-5">
         <div>
           <div className="text-white font-display font-bold text-base">
             China → Cambodia Pipeline
           </div>
           <div className="text-mist-100/45 text-xs mt-0.5">
-            ស្ថានភាពទំនិញឆ្លងប្រទេសបច្ចុប្បន្ន
+            Current cross-border shipment status
           </div>
         </div>
         <div className="flex items-center gap-1.5 text-xs text-signal-blue bg-signal-blue/15 px-2.5 py-1 rounded-sm">
@@ -8775,7 +8354,7 @@ function Sidebar({ open, onClose }) {
         />
       )}
       <aside
-        className={`fixed z-40 inset-y-0 left-0 w-64 bg-ink-900 text-mist-100 flex flex-col
+        className={`cb-sidebar fixed z-40 inset-y-0 left-0 w-64 text-mist-100 flex flex-col
           transform transition-transform duration-200 lg:static lg:translate-x-0
           ${open ? "translate-x-0" : "-translate-x-full"}`}
       >
@@ -8815,9 +8394,9 @@ function Sidebar({ open, onClose }) {
                       to={item.path}
                       onClick={onClose}
                       className={({ isActive }) =>
-                        `flex items-center gap-2.5 px-3 py-2 rounded-sm text-sm transition-colors ${
+                        `flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition-colors ${
                           isActive
-                            ? "bg-signal-blue text-white font-medium"
+                            ? "cb-active text-white font-medium"
                             : "text-mist-100/70 hover:bg-white/5 hover:text-white"
                         }`
                       }
@@ -8885,7 +8464,7 @@ function Topbar({ title, onMenuClick }) {
   }
 
   return (
-    <header className="h-16 shrink-0 bg-white border-b border-mist-200 flex items-center gap-4 px-4 lg:px-6">
+    <header className="cb-topbar h-16 shrink-0 flex items-center gap-4 px-4 lg:px-6">
       <button
         onClick={onMenuClick}
         className="lg:hidden p-2 -ml-2 rounded-sm hover:bg-mist-100 text-ink-800"
@@ -8894,7 +8473,7 @@ function Topbar({ title, onMenuClick }) {
         <Menu size={20} />
       </button>
 
-      <h1 className="font-display font-bold text-lg text-ink-900 hidden sm:block">
+      <h1 className="cb-page-title font-display font-bold text-lg text-ink-900 hidden sm:block">
         {title}
       </h1>
 
@@ -8915,7 +8494,7 @@ function Topbar({ title, onMenuClick }) {
           value={globalSearch}
           onChange={(e) => setGlobalSearch(e.target.value)}
           className="bg-transparent outline-none text-sm text-ink-900 placeholder:text-ink-600/40 w-full"
-          placeholder="ស្វែងរក TK, Order, Container..."
+          placeholder="Search TK, Order, Container..."
         />
       </form>
 
@@ -8962,14 +8541,14 @@ function Topbar({ title, onMenuClick }) {
               className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
             >
               <UserRound size={15} />
-              គណនីរបស់ខ្ញុំ
+              My Account
             </button>
             <button
               onClick={handleLogout}
               className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left"
             >
               <LogOut size={15} />
-              ចាកចេញ
+              Log out
             </button>
           </div>
         )}
@@ -8985,7 +8564,7 @@ function Topbar({ title, onMenuClick }) {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display font-bold text-base text-ink-900 mb-4">
-              គណនីរបស់ខ្ញុំ
+              My Account
             </h3>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-11 h-11 rounded-full bg-ink-800 text-white text-sm font-semibold flex items-center justify-center shrink-0">
@@ -9004,7 +8583,7 @@ function Topbar({ title, onMenuClick }) {
               onClick={() => setShowAccount(false)}
               className="w-full text-sm font-medium text-center border border-mist-200 py-2 rounded-md hover:bg-mist-50"
             >
-              បិទ
+              Close
             </button>
           </div>
         </div>
@@ -9031,11 +8610,11 @@ function Layout() {
   const title = useCurrentTitle();
 
   return (
-    <div className="h-screen flex bg-mist-50">
+    <div className="cb-app h-screen flex bg-[#f4f7fb]">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar title={title} onMenuClick={() => setSidebarOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main className="flex-1 overflow-y-auto p-4 lg:p-6 xl:p-7">
           <Outlet />
         </main>
       </div>
@@ -9073,10 +8652,10 @@ function ProtectedRoute({ children }) {
     return (
       <div className="h-screen flex flex-col items-center justify-center bg-mist-50 gap-2">
         <span className="text-sm text-ink-600/70">
-          អ្នកគ្មានសិទ្ធិចូលមើលទំព័រនេះទេ
+          You do not have permission to view this page.
         </span>
         <span className="text-xs text-ink-600/45">
-          សូមទាក់ទង Super Admin ដើម្បីកំណត់ Role
+          Contact a Super Admin to update your role.
         </span>
       </div>
     );
@@ -9285,7 +8864,7 @@ function CreateRowModal({
       await onSubmit(values);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -9356,14 +8935,14 @@ function CreateRowModal({
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
           >
-            {saving ? "កំពុងរក្សាទុក..." : "រក្សាទុក"}
+            {saving ? "កំពុងSave..." : "Save"}
           </button>
         </div>
       </form>
@@ -9491,7 +9070,7 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
       >
         <div className="px-5 py-4 border-b border-mist-200">
           <h3 className="font-display font-bold text-base text-ink-900">
-            User ថ្មី
+            New User
           </h3>
         </div>
         <div className="p-5 space-y-3.5">
@@ -9664,7 +9243,7 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             type="submit"
@@ -9872,7 +9451,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
       }
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាច Transfer បានទេ");
+      setError(err.message || "Unable to transfer.");
     } finally {
       setSaving(false);
     }
@@ -9890,7 +9469,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
       >
         <div className="px-5 py-4 border-b border-mist-200">
           <h3 className="font-display font-bold text-base text-ink-900">
-            Transfer ថ្មី
+            New Transfer
           </h3>
         </div>
         <div className="p-5 space-y-3.5">
@@ -9923,7 +9502,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
               >
                 {fromLabel
                   ? `From: ${fromLabel}`
-                  : "រកមិនឃើញ TK នេះទេ — សូមពិនិត្យលេខម្តងទៀត"}
+                  : "TK not found នេះទេ — សូមពិនិត្យលេខម្តងទៀត"}
               </p>
             )}
           </div>
@@ -9938,11 +9517,12 @@ function CreateTransferModal({ open, onClose, onCreated }) {
             onQueryChange={setQuery}
             matched={selectedCustomer}
             loading={customerLoading}
-            noteText="ការផ្ទេរនេះកើតឡើងភ្លាមៗ — TK នឹងបាត់ចេញពី Customer ដើម ហើយបង្ហាញនៅ Customer ថ្មីភ្លាមៗ។"
+            noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
           />
           {selectedCustomer && sameCustomer && (
             <p className="text-xs text-signal-red">
-              Customer នេះជា Customer ដដែលរួចហើយ — សូមជ្រើសរើសផ្សេង
+              This is already the same customer — please choose a different
+              customer.
             </p>
           )}
 
@@ -9964,14 +9544,14 @@ function CreateTransferModal({ open, onClose, onCreated }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             type="submit"
             disabled={!canSubmit || saving}
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {saving ? "កំពុង Transfer..." : "Confirm"}
+            {saving ? "Transferring..." : "Confirm"}
           </button>
         </div>
       </form>
@@ -10017,111 +9597,653 @@ const STAGE_LIST_PAGES = {
 // ------------------------------------------------------------
 // components/QuickOutboundScan.jsx
 // ------------------------------------------------------------
-// A direct "scan and it's outbound, no dialog" box for Outbound Origin
-// — unlike Scan Arrive V2 / Scan Sorting V2 (which stop on a Verify
-// screen for a staff member to check before confirming), a China
-// warehouse outbound scan doesn't need that pause: the TK just needs to
-// leave, so it goes straight through addLinkedRow (same write path as
-// the "Scan TK" modal button, incl. the Package Detail timeline sync)
-// the instant a full TK is typed/scanned in.
-function QuickOutboundScan({ addRow }) {
-  const [value, setValue] = useState("");
-  const [container, setContainer] = useState("");
-  const [status, setStatus] = useState(null);
+// Outbound Origin scan flow:
+//   Scan TK → Validate TK → Select existing Container OR Create new
+//   Container (auto CNT number) → Assign TK → TK becomes Outbound Origin
+//
+// No Container Number is typed by hand. Validation reuses the Container
+// module's own TK rules (checkTkForContainer), the container list only
+// offers containers that can still accept TKs, and the actual writes go
+// through the existing store (addTks / createContainer) and the existing
+// stage write path (addRow → addLinkedRow), so TK status rules and the
+// Container lifecycle are untouched. Container status and TK status stay
+// separate: assigning never moves a container, and the TK only ever goes
+// to Outbound Origin here (never Arrived / any Cambodia status).
+const OB_CSS = `
+@keyframes cb-ob-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.cb-ob-in{animation:cb-ob-in .22s cubic-bezier(.2,.7,.2,1) both}
+@media (prefers-reduced-motion:reduce){.cb-ob-in{animation:none}}
+`;
 
-  async function process(raw) {
-    const trimmed = raw.trim();
-    if (!trimmed) return;
-    // Container Number is required to leave Outbound Origin.
-    if (!container.trim()) {
-      setStatus({
-        type: "error",
-        text: "សូមបញ្ចូល Container Number មុន Scan TK",
-      });
-      return;
-    }
-    try {
-      await addRow({
-        tk: trimmed,
-        method: "Land",
-        container_no: container.trim().toUpperCase(),
-      });
-      setStatus({
-        type: "success",
-        text: `TK "${trimmed}" ចេញ Outbound Origin ដោយជោគជ័យ`,
-      });
-      setValue("");
-    } catch (err) {
-      setStatus({ type: "error", text: err.message || "មិនអាច Scan បានទេ" });
-    }
+const pad0 = (n, w = 2) => String(n).padStart(w, "0");
+
+// CNT + YYYYMMDD + 3-digit daily sequence, e.g. CNT20260930001.
+// `skip` lets the caller step past a number that turned out to be taken.
+function generateContainerNumber(containers, skip = 0) {
+  const d = new Date();
+  const prefix = `CNT${d.getFullYear()}${pad0(d.getMonth() + 1)}${pad0(d.getDate())}`;
+  let max = 0;
+  (containers || []).forEach((c) => {
+    const no = String(c.container_number || "").toUpperCase();
+    if (!no.startsWith(prefix)) return;
+    const n = parseInt(no.slice(prefix.length), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  });
+  return `${prefix}${pad0(max + 1 + skip, 3)}`;
+}
+
+// Containers that can still take a TK at Outbound Origin: not cancelled /
+// departed / arrived / sealed, and both warehouses still Active (the same
+// things departChina and addTks insist on).
+function eligibleOutboundContainers(containers, whRows) {
+  const okWh = (code, type) => !whRows.length || whIsActive(whRows, code, type);
+  return (containers || [])
+    .filter((c) => {
+      if (!CONTAINER_TK_EDITABLE.includes(normContainerStatus(c.status)))
+        return false;
+      if (c.departed_at || c.sealed_at || c.seal_number) return false;
+      if (!String(c.container_number || "").trim()) return false;
+      return (
+        okWh(c.origin_wh_code, "china") && okWh(c.dest_wh_code, "cambodia")
+      );
+    })
+    .sort((a, b) =>
+      String(b.created_at || "").localeCompare(String(a.created_at || "")),
+    );
+}
+
+// TK-only validation (no container chosen yet). Same rules as adding a TK
+// to a container, plus: a TK sitting in any active container the user
+// can't see is still "already assigned".
+function checkTkForOutbound({ raw, packages, activeItems, containers }) {
+  const key = tkKey(raw);
+  const pkg = packages.find((p) => tkKey(p.tk) === key);
+  const stray = pkg && activeItems.find((i) => tkKey(i.tk) === key);
+  if (stray) {
+    const c = containers.find((x) => x.id === stray.container_id);
+    if (!c || c.status !== "Cancelled")
+      return {
+        ok: false,
+        pkg,
+        error: `TK ${pkg.tk} ត្រូវបានដាក់ក្នុង Container ${c?.container_number || "ផ្សេង"} រួចហើយ`,
+      };
+  }
+  return checkTkForContainer({
+    raw,
+    container: { id: null, container_number: "", status: "Empty" },
+    packages,
+    activeItems,
+    containers,
+  });
+}
+
+function outboundContainerDefaults(pkg, whRows) {
+  const china = whRows.filter(
+    (w) => w.type === "china" && w.status === "Active",
+  );
+  const kh = whRows.filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+  const o = pkg?.origin_wh_code || pkg?.warehouse;
+  const d = pkg?.dest_branch_code;
+  return {
+    origin_wh_code: china.some((w) => w.code === o)
+      ? o
+      : china.length === 1
+        ? china[0].code
+        : "",
+    dest_wh_code: kh.some((w) => w.code === d)
+      ? d
+      : kh.length === 1
+        ? kh[0].code
+        : "",
+    container_type: "40HQ",
+    shipping_method: "Sea",
+  };
+}
+
+function OutboundStepper({ idx }) {
+  const steps = ["Scan TK", "Container", "Outbound"];
+  return (
+    <ol className="flex items-center gap-1.5 text-[11px] font-medium">
+      {steps.map((label, i) => {
+        const done = i < idx || idx === 2;
+        const active = i === idx && idx !== 2;
+        return (
+          <li key={label} className="flex items-center gap-1.5">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 border transition-colors duration-200 ${
+                done
+                  ? "bg-signal-teal/10 text-signal-teal border-signal-teal/25"
+                  : active
+                    ? "bg-signal-blue/10 text-signal-blue border-signal-blue/30"
+                    : "bg-white text-ink-600/45 border-mist-200"
+              }`}
+            >
+              {done ? <Check size={11} /> : <span>{i + 1}</span>}
+              {label}
+            </span>
+            {i < steps.length - 1 && (
+              <span className="w-3 h-px bg-mist-200" aria-hidden="true" />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
+  const { user } = useAuth();
+  const store = useContainerStore();
+  const { packages } = usePackageTracking();
+  const canAssign = hasPermission(user, "container.manage");
+  const scan = useScanFeedback();
+
+  const [value, setValue] = useState(initialTk);
+  const [stage, setStage] = useState("scan"); // scan | assign
+  const [pkg, setPkg] = useState(null);
+  const [mode, setMode] = useState("existing"); // existing | new
+  const [pickId, setPickId] = useState("");
+  const [lastId, setLastId] = useState(""); // last container used this session
+  const [q, setQ] = useState("");
+  const [form, setForm] = useState(() =>
+    outboundContainerDefaults(null, store.whRows),
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [justDone, setJustDone] = useState(false);
+  const debounceTimer = useRef(null);
+  const doneTimer = useRef(null);
+  const validatedKey = pkg ? tkKey(pkg.tk) : "";
+
+  useEffect(() => () => clearTimeout(doneTimer.current), []);
+  // The page's "Scan TK" button just puts the cursor back in the scan box.
+  useEffect(() => {
+    if (focusKey) scan.focusInput(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
+
+  const eligible = React.useMemo(
+    () => eligibleOutboundContainers(store.containers, store.whRows),
+    [store.containers, store.whRows],
+  );
+  const cards = React.useMemo(
+    () =>
+      eligible.map((c) => ({
+        c,
+        s: summarizeTks(tkRowsFor(c, store.activeItems, packages)),
+      })),
+    [eligible, store.activeItems, packages],
+  );
+  const shown = q.trim()
+    ? cards.filter(({ c }) =>
+        `${c.container_number} ${c.origin_wh_code} ${c.dest_wh_code}`
+          .toLowerCase()
+          .includes(q.trim().toLowerCase()),
+      )
+    : cards;
+  const picked = eligible.find((c) => c.id === pickId) || null;
+  const chinaWh = store.whRows.filter(
+    (w) => w.type === "china" && w.status === "Active",
+  );
+  const khWh = store.whRows.filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+
+  function backToScan() {
+    setStage("scan");
+    setPkg(null);
+    setPickId("");
+    setQ("");
+    setErr("");
   }
 
-  // Same "no Enter needed" auto-fire used on Scan Arrive V2 / Sorting —
-  // a scanner's burst of characters pauses briefly once done typing.
+  async function validate(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed || busy) return;
+    if (stage === "assign" && tkKey(trimmed) === validatedKey) return;
+    if (supabase && !store.tableReady) {
+      scan.fail(CONTAINER_TABLE_HINT, false);
+      return;
+    }
+    if (!store.ready) {
+      scan.fail("កំពុងផ្ទុកទិន្នន័យ Container… សូមរង់ចាំបន្តិច", false);
+      return;
+    }
+    scan.begin();
+    setErr("");
+    const r = checkTkForOutbound({
+      raw: trimmed,
+      packages,
+      activeItems: store.activeItems,
+      containers: store.containers,
+    });
+    if (!r.ok) {
+      backToScan();
+      scan.fail(r.error);
+      return;
+    }
+    if (!canAssign) {
+      backToScan();
+      scan.fail("អ្នកគ្មានសិទ្ធិជ្រើសរើស ឬបង្កើត Container ទេ");
+      return;
+    }
+    setPkg(r.pkg);
+    setStage("assign");
+    setForm(outboundContainerDefaults(r.pkg, store.whRows));
+    setMode(eligible.length ? "existing" : "new");
+    setPickId(eligible.some((c) => c.id === lastId) ? lastId : "");
+    scan.succeed(`TK "${r.pkg.tk}" ត្រឹមត្រូវ — ជ្រើស ឬបង្កើត Container`);
+  }
+
+  // A scanner's burst of characters pauses briefly once done typing.
   useEffect(() => {
     const trimmed = value.trim();
     if (!trimmed) return;
-    const timer = setTimeout(() => process(trimmed), 250);
-    return () => clearTimeout(timer);
+    debounceTimer.current = setTimeout(() => validate(trimmed), 250);
+    return () => clearTimeout(debounceTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
-  useEffect(() => {
-    if (!status) return;
-    const timer = setTimeout(() => setStatus(null), 3000);
-    return () => clearTimeout(timer);
-  }, [status]);
+  // Container first, then the existing Outbound Origin write. If the second
+  // step fails the TK is taken back out so nothing is half-assigned.
+  async function assignTo(container) {
+    const tk = pkg.tk;
+    const r = await store.addTks(container, [tk]);
+    if (r.failed.length || !r.added.length)
+      throw new Error(
+        r.failed[0]?.error || "មិនអាចដាក់ TK ចូល Container បានទេ",
+      );
+    try {
+      await addRow({
+        tk,
+        method: container.shipping_method || "Sea",
+        container_no: container.container_number,
+      });
+    } catch (e) {
+      try {
+        await store.removeTk(
+          container,
+          tk,
+          "Outbound Origin មិនជោគជ័យ — rollback ស្វ័យប្រវត្តិ",
+        );
+      } catch {
+        throw new Error(
+          `${e.message} — TK ស្ថិតក្នុង ${container.container_number} តែមិនទាន់ Outbound សូមពិនិត្យ`,
+        );
+      }
+      throw e;
+    }
+    setLastId(container.id);
+    setValue("");
+    backToScan();
+    setJustDone(true);
+    clearTimeout(doneTimer.current);
+    doneTimer.current = setTimeout(() => setJustDone(false), 1600);
+    scan.succeed(
+      `TK "${tk}" → ${container.container_number} · Outbound Origin`,
+    );
+    // Straight back to the scan box for the next package.
+    scan.focusInput(false);
+  }
+
+  async function confirm() {
+    if (busy || !pkg) return;
+    setErr("");
+    setBusy(true);
+    try {
+      if (mode === "existing") {
+        if (!picked) throw new Error("សូមជ្រើសរើស Container");
+        await assignTo(picked);
+        return;
+      }
+      if (!form.origin_wh_code || !form.dest_wh_code)
+        throw new Error("សូមជ្រើសរើស China Warehouse និង Cambodia Branch");
+      let created = null;
+      for (let i = 0; i < 6 && !created; i++) {
+        try {
+          created = await store.createContainer({
+            ...form,
+            container_number: generateContainerNumber(store.containers, i),
+          });
+        } catch (e) {
+          if (!/មានរួចហើយ/.test(e.message || "")) throw e;
+        }
+      }
+      if (!created)
+        throw new Error(
+          "មិនអាចបង្កើតលេខ Container ថ្មីបានទេ សូមព្យាយាមម្តងទៀត",
+        );
+      try {
+        await assignTo(created);
+      } catch (e) {
+        // Keep the new (empty) container selectable instead of orphaning it.
+        setMode("existing");
+        setPickId(created.id);
+        throw new Error(
+          `បង្កើត ${created.container_number} រួច ប៉ុន្តែដាក់ TK មិនបាន: ${e.message}`,
+        );
+      }
+    } catch (e) {
+      setErr(e.message || "មិនអាចSaveបានទេ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const stepIdx = stage === "assign" ? 1 : justDone ? 2 : 0;
+  const nextNo = generateContainerNumber(store.containers);
+  const canConfirm = !busy && (mode === "new" || !!picked);
+  const tkInfo = pkg ? tkCustomerParts(pkg) : null;
 
   return (
-    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          process(value);
-        }}
-        className="space-y-3 max-w-md"
-      >
-        <div className="space-y-1.5">
-          <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
-            Container Number <span className="text-signal-red">*</span>
-          </label>
-          <input
-            value={container}
-            onChange={(e) => setContainer(e.target.value)}
-            placeholder="CNT20260928001"
-            className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-          />
+    <div className="cb-surface cb-card">
+      <style>{OB_CSS}</style>
+      <div className="flex items-center justify-between gap-3 flex-wrap px-5 py-3.5 border-b border-mist-200">
+        <div>
+          <h2 className="font-display font-bold text-sm text-ink-900">
+            Scan &amp; Assign
+          </h2>
+          <p className="text-xs text-ink-600/55">
+            Scan TK → Container → Outbound Origin
+          </p>
         </div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide -mb-1.5">
-          Scan Tracking Number
-        </label>
-        <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 focus-within:border-signal-blue">
-          <Icons.ScanLine size={16} className="text-ink-600/40 shrink-0" />
-          <input
-            autoFocus
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="e.g. TK202609250041"
-            className="flex-1 outline-none text-sm bg-transparent"
-          />
-        </div>
-      </form>
-      {status && (
-        <div
-          className={`flex items-center gap-2 text-sm rounded-md px-3 py-2 mt-3 max-w-md ${
-            status.type === "success"
-              ? "text-signal-teal bg-signal-teal/10"
-              : "text-signal-red bg-signal-red/10"
-          }`}
+        <OutboundStepper idx={stepIdx} />
+      </div>
+
+      <div className="p-5 grid gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            clearTimeout(debounceTimer.current);
+            validate(value);
+          }}
+          className="space-y-3"
         >
-          {status.type === "success" ? (
-            <Check size={14} className="shrink-0" />
-          ) : (
-            <TriangleAlert size={14} className="shrink-0" />
+          <TkScanField
+            value={value}
+            onChange={(v) => {
+              if (stage === "assign" && tkKey(v) !== validatedKey) backToScan();
+              setValue(v);
+              scan.onInput(v);
+            }}
+            placeholder="e.g. TK202609250041"
+            scan={scan}
+          />
+          {pkg && (
+            <div className="cb-ob-in rounded-md border border-mist-200 bg-mist-50 px-3.5 py-3 text-xs grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <p className="text-ink-600/50 uppercase tracking-wide text-[10px] font-semibold">
+                  Customer
+                </p>
+                <p className="text-ink-900 font-medium truncate">
+                  {tkInfo.id} · {tkInfo.name}
+                </p>
+              </div>
+              <div>
+                <p className="text-ink-600/50 uppercase tracking-wide text-[10px] font-semibold">
+                  Order ID
+                </p>
+                <p className="text-ink-900 font-medium">
+                  {pkg.order_no || "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-ink-600/50 uppercase tracking-wide text-[10px] font-semibold">
+                  Receiving Branch
+                </p>
+                <p className="text-ink-900 font-medium">
+                  {pkg.dest_branch_code || "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-ink-600/50 uppercase tracking-wide text-[10px] font-semibold">
+                  Weight · CBM
+                </p>
+                <p className="text-ink-900 font-medium">
+                  {pkg.weight_kg ?? pkg.weight ?? "—"} KG · {pkg.cbm ?? "—"}
+                </p>
+              </div>
+            </div>
           )}
-          {status.text}
-        </div>
-      )}
+        </form>
+
+        {stage !== "assign" ? (
+          <div className="hidden lg:flex items-center justify-center min-h-[9rem] rounded-md border border-dashed border-mist-200 text-xs text-ink-600/45 text-center px-6">
+            Container ជ្រើសរើសបានNextពី TK ត្រឹមត្រូវ
+          </div>
+        ) : (
+          <div className="cb-ob-in space-y-3">
+            <div className="inline-flex rounded-md border border-mist-200 bg-mist-50 p-0.5 text-xs font-medium">
+              {[
+                ["existing", `Existing Container (${eligible.length})`],
+                ["new", "+ New Container"],
+              ].map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    setMode(k);
+                    setErr("");
+                  }}
+                  className={`px-3 py-1.5 rounded transition-colors ${
+                    mode === k
+                      ? "bg-white text-ink-900 shadow-sm"
+                      : "text-ink-600/60 hover:text-ink-900"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {mode === "existing" ? (
+              eligible.length === 0 ? (
+                <p className="text-xs text-ink-600/55 rounded-md border border-dashed border-mist-200 px-4 py-6 text-center">
+                  មិនមាន Container ដែលអាចដាក់ TK បានទេ — សូមបង្កើត Container
+                  ថ្មី
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {cards.length > 5 && (
+                    <input
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      placeholder="Search Container..."
+                      className="w-full bg-white border border-mist-200 rounded-md px-3 py-1.5 text-sm outline-none focus:border-signal-blue"
+                    />
+                  )}
+                  <div
+                    role="radiogroup"
+                    className="max-h-56 overflow-y-auto space-y-1.5 pr-0.5"
+                  >
+                    {shown.map(({ c, s }) => {
+                      const on = c.id === pickId;
+                      const st = normContainerStatus(c.status);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={on}
+                          onClick={() => setPickId(c.id)}
+                          className={`w-full text-left flex items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
+                            on
+                              ? "border-signal-blue bg-signal-blue/5"
+                              : "border-mist-200 bg-white hover:bg-mist-50"
+                          }`}
+                        >
+                          <span
+                            className={`shrink-0 w-4 h-4 rounded-full border flex items-center justify-center ${
+                              on ? "border-signal-blue" : "border-mist-200"
+                            }`}
+                          >
+                            {on && (
+                              <span className="w-2 h-2 rounded-full bg-signal-blue" />
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="font-semibold text-sm text-ink-900 tracking-wide">
+                                {c.container_number}
+                              </span>
+                              <span
+                                className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${
+                                  st === "Loading"
+                                    ? "bg-signal-blue/10 text-signal-blue"
+                                    : "bg-mist-100 text-ink-700"
+                                }`}
+                              >
+                                {st}
+                              </span>
+                              {c.id === lastId && (
+                                <span className="text-[10px] text-ink-600/45">
+                                  ប្រើចុងក្រោយ
+                                </span>
+                              )}
+                            </span>
+                            <span className="block text-[11px] text-ink-600/55 truncate">
+                              {c.container_type} · {c.shipping_method || "—"} ·{" "}
+                              {c.origin_wh_code} → {c.dest_wh_code}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-right text-[11px] text-ink-600/60 leading-tight">
+                            <span className="block font-medium text-ink-900">
+                              {s.tk} TK
+                            </span>
+                            {s.cbm.toFixed(2)} m³
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {shown.length === 0 && (
+                      <p className="text-xs text-ink-600/45 px-3 py-2">
+                        រកមិនឃើញ Container
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )
+            ) : (
+              <div className="rounded-md border border-mist-200 p-3.5 space-y-3">
+                <div className="flex items-center justify-between rounded-md bg-mist-50 px-3 py-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-600/50">
+                    Container Number
+                  </span>
+                  <span className="text-sm font-semibold tracking-wide text-ink-900">
+                    {nextNo}
+                    <span className="ml-2 text-[10px] font-medium text-signal-teal">
+                      AUTO
+                    </span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {[
+                    ["origin_wh_code", "China Warehouse", chinaWh, true],
+                    ["dest_wh_code", "Cambodia Branch", khWh, true],
+                  ].map(([k, label, list]) => (
+                    <div key={k}>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-ink-600/50 mb-1">
+                        {label} <span className="text-signal-red">*</span>
+                      </label>
+                      <select
+                        value={form[k]}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, [k]: e.target.value }))
+                        }
+                        className={INPUT_CLS}
+                      >
+                        <option value="">—</option>
+                        {list.map((w) => (
+                          <option key={w.code} value={w.code}>
+                            {w.code} — {w.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-ink-600/50 mb-1">
+                      Type
+                    </label>
+                    <select
+                      value={form.container_type}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          container_type: e.target.value,
+                        }))
+                      }
+                      className={INPUT_CLS}
+                    >
+                      {CONTAINER_TYPES.map((t) => (
+                        <option key={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-ink-600/50 mb-1">
+                      Shipping Method
+                    </label>
+                    <select
+                      value={form.shipping_method}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          shipping_method: e.target.value,
+                        }))
+                      }
+                      className={INPUT_CLS}
+                    >
+                      {SHIPPING_METHODS.map((t) => (
+                        <option key={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {err && (
+              <div className="flex items-start gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
+                <TriangleAlert size={14} className="shrink-0 mt-0.5" />
+                {err}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setValue("");
+                  scan.reset();
+                  backToScan();
+                  scan.focusInput(false);
+                }}
+                className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!canConfirm}
+                onClick={confirm}
+                className="inline-flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
+              >
+                {busy
+                  ? "កំពុងSave..."
+                  : mode === "new"
+                    ? `Create ${nextNo} & Assign`
+                    : picked
+                      ? `Assign to ${picked.container_number}`
+                      : "Assign to Container"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -10200,7 +10322,7 @@ function RowEditModal({ row, columns, onSave, onClose }) {
       await onSave(patch);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -10264,7 +10386,7 @@ function RowEditModal({ row, columns, onSave, onClose }) {
             disabled={saving}
             className="bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
           >
-            {saving ? "កំពុងរក្សាទុក..." : "Save"}
+            {saving ? "កំពុងSave..." : "Save"}
           </button>
         </div>
       </form>
@@ -10291,8 +10413,8 @@ function RowDeleteModal({ label, onConfirm, onClose }) {
         </div>
         <div className="px-5 py-4 text-sm text-ink-700 space-y-2">
           <p>
-            តើអ្នកប្រាកដថាចង់លុប <b>{label}</b> ជាអចិន្ត្រៃយ៍មែនទេ?
-            សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។
+            Are you sure you want to permanently delete <b>{label}</b>{" "}
+            ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
           </p>
           {error && <p className="text-xs text-signal-red">{error}</p>}
         </div>
@@ -10314,19 +10436,110 @@ function RowDeleteModal({ label, onConfirm, onClose }) {
                 await onConfirm();
                 onClose();
               } catch (err) {
-                setError(err.message || "មិនអាចលុបបានទេ");
+                setError(err.message || "Unable to delete.");
               } finally {
                 setBusy(false);
               }
             }}
             className="bg-signal-red text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-red/90 disabled:opacity-50"
           >
-            {busy ? "កំពុងលុប..." : "Delete"}
+            {busy ? "Deleting..." : "Delete"}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+// Stat cards on list pages are computed from the live server data (never
+// typed in). `metric` keys come from MODULES[path].stats.
+const STAT_NUM = (n, max = 0) =>
+  Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: max });
+
+function computeListStat(metric, { packages, stageRows, rows }) {
+  const today = new Date();
+  const status = (r) => String(r?.status || "");
+  switch (metric) {
+    case "total":
+      return STAT_NUM(rows.length);
+    case "atChina":
+      return STAT_NUM(
+        packages.filter((p) => !p.status || p.status === "Inbound Origin")
+          .length,
+      );
+    case "inTransit":
+      return STAT_NUM(
+        packages.filter((p) => IN_TRANSIT_STATUSES.includes(p.status)).length,
+      );
+    case "delivered":
+      return STAT_NUM(packages.filter((p) => p.status === "Completed").length);
+    case "receivedToday":
+      return STAT_NUM(
+        packages.filter((p) =>
+          isSameCalendarDay(p.inbound_at || p.created_at, today),
+        ).length,
+      );
+    case "awaitingQc":
+      return STAT_NUM(
+        packages.filter(
+          (p) =>
+            (!p.status || p.status === "Inbound Origin") &&
+            ["Pending", "Received", "Measuring", "Checked"].includes(
+              p.inbound_status,
+            ),
+        ).length,
+      );
+    case "notFound":
+      return STAT_NUM(
+        packages.filter(
+          (p) =>
+            (!p.status || p.status === "Inbound Origin") &&
+            tkCustomerParts(p).id === "—",
+        ).length,
+      );
+    case "totalCbm":
+      return STAT_NUM(
+        stageRows.reduce((s, r) => s + (Number(r.cbm) || 0), 0),
+        2,
+      );
+    case "totalWeight":
+      return STAT_NUM(
+        stageRows.reduce(
+          (s, r) => s + (Number(r.weight_kg ?? r.weight) || 0),
+          0,
+        ),
+        2,
+      );
+    case "shipInTransit":
+      return STAT_NUM(rows.filter((r) => status(r) === "In Transit").length);
+    case "shipArrived":
+      return STAT_NUM(rows.filter((r) => status(r) === "Arrived").length);
+    case "khScanned":
+      return STAT_NUM(rows.reduce((s, r) => s + (Number(r.scanned) || 0), 0));
+    case "khMissing":
+      return STAT_NUM(rows.reduce((s, r) => s + (Number(r.missing) || 0), 0));
+    case "dlvOut":
+      return STAT_NUM(
+        rows.filter((r) => status(r) === "Out for Delivery").length,
+      );
+    case "dlvDone":
+      return STAT_NUM(rows.filter((r) => status(r) === "Delivered").length);
+    case "dlvFailed":
+      return STAT_NUM(rows.filter((r) => /^Failed/i.test(status(r))).length);
+    case "newThisMonth":
+      return STAT_NUM(
+        rows.filter((r) => {
+          const d = new Date(r.created_at);
+          return (
+            !Number.isNaN(d.getTime()) &&
+            d.getFullYear() === today.getFullYear() &&
+            d.getMonth() === today.getMonth()
+          );
+        }).length,
+      );
+    default:
+      return "—";
+  }
 }
 
 function ListPage({
@@ -10410,10 +10623,10 @@ function ListPage({
     if (!existing) {
       throw new Error(
         path === "/inbound-origin"
-          ? `រកមិនឃើញ TK "${tk}" ទេ — សូមបង្កើត TK នៅ Packages / TK សិន`
+          ? `TK not found "${tk}" ទេ — សូមបង្កើត TK នៅ Packages / TK សិន`
           : path === "/sorting"
-            ? `រកមិនឃើញ TK "${tk}" ទេ — TK នេះមិនទាន់មកដល់ឃ្លាំងកម្ពុជាទេ`
-            : `រកមិនឃើញ TK "${tk}" ទេ — សូម Scan TK នៅ Inbound Origin សិន`,
+            ? `TK not found "${tk}" ទេ — TK នេះមិនទាន់មកដល់ឃ្លាំងកម្ពុជាទេ`
+            : `TK not found "${tk}" ទេ — សូម Scan TK នៅ Inbound Origin សិន`,
       );
     }
 
@@ -10486,6 +10699,20 @@ function ListPage({
   // Skeleton only while the FIRST server fetch is running.
   const listLoading =
     isLinkedTk || isExceptionsModule ? !packagesReady : !tableReady;
+  // Real numbers only: TKs this user may see (customers: only their own).
+  const visiblePackages = packages.filter(
+    (p) =>
+      user?.role !== "Customer" ||
+      (user?.customerId && customerIdOf(p) === user.customerId),
+  );
+  const liveStats = (stats || []).map((s) => ({
+    ...s,
+    value: computeListStat(s.metric, {
+      packages: visiblePackages,
+      stageRows: linkedRows,
+      rows: isLinkedTk ? linkedRows : tableRows,
+    }),
+  }));
   // A freshly scanned TK should default to "Inbound Origin" / a real
   // outbound status, not whatever status happens to be first among
   // whatever's already in the registry.
@@ -10502,7 +10729,11 @@ function ListPage({
   const [searchParams] = useSearchParams();
   const prefillTk =
     path === "/outbound-origin" ? searchParams.get("tk") || "" : "";
-  const [showCreate, setShowCreate] = useState(!!prefillTk);
+  // Outbound Origin has no modal any more: "Scan TK" focuses the inline scanner.
+  const [showCreate, setShowCreate] = useState(
+    !!prefillTk && path !== "/outbound-origin",
+  );
+  const [scanFocusKey, setScanFocusKey] = useState(0);
   const [adv, setAdv] = useState(EMPTY_ADV);
   const [showAdv, setShowAdv] = useState(false);
   const filterRef = useRef(null);
@@ -10583,7 +10814,11 @@ function ListPage({
         </div>
         {primaryAction && canCreate && (
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() =>
+              path === "/outbound-origin"
+                ? setScanFocusKey((k) => k + 1)
+                : setShowCreate(true)
+            }
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 transition-colors"
           >
             <Plus size={16} />
@@ -10592,19 +10827,29 @@ function ListPage({
         )}
       </div>
 
-      {stats?.length > 0 && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {stats.map((s) => (
-            <StatCard key={s.label} {...s} />
-          ))}
-        </div>
-      )}
+      {liveStats.length > 0 &&
+        (listLoading ? (
+          <StatCardsSkeleton
+            count={liveStats.length}
+            className="grid grid-cols-2 lg:grid-cols-4 gap-3"
+          />
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {liveStats.map(({ metric, ...s }) => (
+              <StatCard key={s.label} {...s} />
+            ))}
+          </div>
+        ))}
 
       {path === "/outbound-origin" && canCreate && (
-        <QuickOutboundScan addRow={addRow} />
+        <QuickOutboundScan
+          addRow={addRow}
+          initialTk={prefillTk}
+          focusKey={scanFocusKey}
+        />
       )}
 
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+      <div className="cb-surface cb-card">
         <div className="flex items-center gap-2 px-4 lg:px-5 py-3.5 border-b border-mist-200 flex-wrap">
           <div className="flex items-center gap-2 bg-mist-100 rounded-md px-3 py-2 flex-1 min-w-[180px] max-w-xs">
             <Search size={15} className="text-ink-600/40" />
@@ -10612,7 +10857,7 @@ function ListPage({
               value={search}
               onChange={resetToFirstPage((e) => setSearch(e.target.value))}
               className="bg-transparent outline-none text-sm w-full placeholder:text-ink-600/40"
-              placeholder="ស្វែងរក..."
+              placeholder="Search..."
             />
           </div>
 
@@ -10634,7 +10879,7 @@ function ListPage({
                   })}
                   className="w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 text-ink-600/60"
                 >
-                  ទាំងអស់
+                  All
                 </button>
                 {statusOptions.map((opt) => (
                   <button
@@ -10795,7 +11040,7 @@ function ListPage({
               disabled={currentPage === 0}
               className="px-2.5 py-1 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              មុន
+              Previous
             </button>
             <span className="px-2.5 py-1 rounded-sm bg-signal-blue text-white">
               {currentPage + 1} / {totalPages}
@@ -10805,7 +11050,7 @@ function ListPage({
               disabled={currentPage >= totalPages - 1}
               className="px-2.5 py-1 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              បន្ទាប់
+              Next
             </button>
           </div>
         </div>
@@ -10829,14 +11074,7 @@ function ListPage({
           open={showCreate}
           onClose={() => setShowCreate(false)}
         />
-      ) : path === "/outbound-origin" ? (
-        <CreateOutboundModal
-          open={showCreate}
-          onClose={() => setShowCreate(false)}
-          onSubmit={addRow}
-          initialTk={prefillTk}
-        />
-      ) : path === "/arrival" ? (
+      ) : path === "/outbound-origin" ? null : path === "/arrival" ? (
         <CreateArrivalModal
           open={showCreate}
           onClose={() => setShowCreate(false)}
@@ -11086,94 +11324,101 @@ function Login() {
     e.preventDefault();
     setError("");
     if (!email || !password) {
-      setError("សូមបញ្ចូល Email និង Password");
+      setError("Please enter your email and password.");
       return;
     }
     setSubmitting(true);
     const { error } = await login(email, password);
     setSubmitting(false);
     if (error) {
-      setError(error.message || "Email ឬ Password មិនត្រឹមត្រូវ");
+      setError(error.message || "Incorrect email or password.");
       return;
     }
     navigate(location.state?.from?.pathname || "/", { replace: true });
   }
 
   return (
-    <div className="min-h-screen flex bg-mist-50">
-      {/* Branding panel */}
-      <div className="hidden lg:flex lg:w-[42%] bg-ink-900 text-white flex-col justify-between p-10 xl:p-14">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-sm bg-signal-blue flex items-center justify-center">
-            <Waypoints size={20} />
-          </div>
-          <div className="font-display font-extrabold text-lg tracking-tight">
-            Cargo Bridge
-          </div>
-        </div>
+    <div className="cb-login-page min-h-screen relative overflow-hidden bg-[#f6f9fd] flex items-center justify-center px-5 py-8 sm:px-8">
+      {/* Animated background */}
+      <style>{`
+        @keyframes cb-float-a {
+          0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+          50% { transform: translate3d(38px, 26px, 0) rotate(7deg) scale(1.04); }
+        }
+        @keyframes cb-float-b {
+          0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+          50% { transform: translate3d(-34px, 24px, 0) rotate(-8deg) scale(1.06); }
+        }
+        @keyframes cb-float-c {
+          0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: .36; }
+          50% { transform: translate3d(0, -32px, 0) scale(1.12); opacity: .58; }
+        }
+        @keyframes cb-pulse {
+          0%, 100% { transform: scale(1); opacity: .22; }
+          50% { transform: scale(1.16); opacity: .38; }
+        }
+        @keyframes cb-drift {
+          0% { transform: translate3d(0, 0, 0); }
+          50% { transform: translate3d(0, 16px, 0); }
+          100% { transform: translate3d(0, 0, 0); }
+        }
+        .cb-blob-a { animation: cb-float-a 14s ease-in-out infinite; }
+        .cb-blob-b { animation: cb-float-b 17s ease-in-out infinite; }
+        .cb-blob-c { animation: cb-float-c 11s ease-in-out infinite; }
+        .cb-pulse { animation: cb-pulse 8s ease-in-out infinite; }
+        .cb-drift { animation: cb-drift 7s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .cb-blob-a, .cb-blob-b, .cb-blob-c, .cb-pulse, .cb-drift { animation: none !important; }
+        }
+      `}</style>
 
-        <div>
-          <h1 className="font-display font-extrabold text-3xl xl:text-4xl leading-tight">
-            គ្រប់គ្រងទំនិញឆ្លងប្រទេស
-            <br />
-            ពី China ដល់ Cambodia
-          </h1>
-          <p className="text-mist-100/50 mt-4 text-sm max-w-sm leading-relaxed">
-            តាមដាន TK, Shipment និង Container ពី Inbound Origin រហូតដល់ Delivery
-            ក្នុងប្រព័ន្ធតែមួយ។
-          </p>
+      <div className="pointer-events-none absolute -top-52 -right-48 h-[680px] w-[680px] rounded-full bg-[#2563eb]/10 blur-2xl cb-blob-a" />
+      <div className="pointer-events-none absolute -bottom-56 -left-44 h-[620px] w-[620px] rounded-full bg-[#0f2a55]/10 blur-2xl cb-blob-b" />
+      <div className="pointer-events-none absolute top-[8%] left-[10%] h-24 w-24 rounded-full bg-[#60a5fa]/25 blur-xl cb-pulse" />
+      <div className="pointer-events-none absolute right-[10%] bottom-[12%] h-32 w-32 rounded-full bg-[#93c5fd]/30 blur-2xl cb-blob-c" />
 
-          <div className="flex items-center gap-3 mt-8">
-            {STAGE_DOTS.map((flag, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-white/10 border border-white/15 flex items-center justify-center text-sm">
-                  {flag}
-                </div>
-                {i < STAGE_DOTS.length - 1 && (
-                  <div className="w-8 h-px bg-white/15" />
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* Decorative flowing shapes behind the card */}
+      <div className="pointer-events-none absolute -right-24 top-1/2 h-[430px] w-[760px] -translate-y-1/2 rounded-[48%] border-[42px] border-[#2563eb]/[0.07] rotate-[-12deg] cb-drift" />
+      <div className="pointer-events-none absolute -left-28 top-[18%] h-[300px] w-[540px] rounded-[48%] border-[30px] border-[#0f2a55]/[0.05] rotate-[18deg] cb-drift" />
 
-        <div className="text-mist-100/35 text-xs">
-          © 2026 Cargo Bridge Logistics
-        </div>
+      <div className="pointer-events-none absolute inset-0 opacity-40">
+        <div className="absolute left-[7%] top-[28%] h-2 w-2 rounded-full bg-[#2563eb] cb-pulse" />
+        <div className="absolute left-[15%] top-[68%] h-1.5 w-1.5 rounded-full bg-[#60a5fa] cb-drift" />
+        <div className="absolute right-[14%] top-[25%] h-2.5 w-2.5 rounded-full bg-[#2563eb] cb-pulse" />
+        <div className="absolute right-[7%] bottom-[24%] h-1.5 w-1.5 rounded-full bg-[#0f2a55] cb-drift" />
       </div>
 
-      {/* Form panel */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-sm">
-          <div className="lg:hidden flex items-center gap-2.5 mb-8">
-            <div className="w-8 h-8 rounded-sm bg-signal-blue flex items-center justify-center">
-              <Waypoints size={18} className="text-white" />
+      {/* Login card */}
+      <div className="relative z-10 w-full max-w-[440px]">
+        <div className="rounded-[24px] border border-white/80 bg-white/95 p-7 shadow-[0_24px_80px_rgba(15,42,85,0.12)] backdrop-blur-xl sm:p-9">
+          <div className="text-center">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-signal-blue shadow-lg shadow-blue-500/20">
+              <Waypoints size={27} className="text-white" />
             </div>
-            <div className="font-display font-extrabold text-ink-900">
+            <div className="font-display text-xl font-extrabold tracking-tight text-ink-900">
               Cargo Bridge
             </div>
+            <h2 className="mt-5 font-display text-[26px] font-bold leading-tight text-ink-900">
+              Sign in
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-ink-600/55">
+              Sign in to access your logistics management workspace.
+            </p>
           </div>
 
-          <h2 className="font-display font-bold text-2xl text-ink-900">
-            ចូលប្រើប្រាស់
-          </h2>
-          <p className="text-sm text-ink-600/55 mt-1.5">
-            បញ្ចូលគណនីរបស់អ្នកដើម្បីចូលទៅកាន់ប្រព័ន្ធគ្រប់គ្រង។
-          </p>
-
           {isMock && (
-            <div className="mt-5 flex items-start gap-2 bg-signal-amber/10 text-[#8A5A12] text-xs rounded-md px-3 py-2.5 leading-relaxed">
-              <TriangleAlert size={14} className="shrink-0 mt-0.5" />
+            <div className="mt-5 flex items-start gap-2 rounded-xl bg-signal-amber/10 px-3 py-2.5 text-xs leading-relaxed text-[#8A5A12]">
+              <TriangleAlert size={14} className="mt-0.5 shrink-0" />
               <span>
-                Demo mode — Supabase មិនទាន់ភ្ជាប់នៅឡើយ។ បញ្ចូល Email/Password
-                ណាមួយ ដើម្បីចូលសាកល្បង។
+                Demo mode — Supabase is not connected. Enter any email and
+                password to preview the interface.
               </span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <form onSubmit={handleSubmit} className="mt-7 space-y-5">
             <div>
-              <label className="block text-xs font-medium text-ink-700 mb-1.5">
+              <label className="mb-2 block text-xs font-semibold text-ink-700">
                 Email
               </label>
               <input
@@ -11181,22 +11426,24 @@ function Login() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@cargobridge.com"
-                className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 text-sm outline-none focus:border-signal-blue transition-colors"
+                className="w-full rounded-xl border border-mist-200 bg-[#fbfcfe] px-4 py-3 text-sm text-ink-900 outline-none transition-all placeholder:text-ink-600/35 focus:border-signal-blue focus:bg-white focus:ring-4 focus:ring-signal-blue/10"
                 autoComplete="email"
               />
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-medium text-ink-700">
+              <div className="mb-2 flex items-center justify-between">
+                <label className="block text-xs font-semibold text-ink-700">
                   Password
                 </label>
                 <button
                   type="button"
-                  className="text-xs text-signal-blue hover:underline"
-                  onClick={() => setError("ទាក់ទង Admin ដើម្បី Reset Password")}
+                  className="text-xs font-medium text-signal-blue transition-colors hover:text-blue-700"
+                  onClick={() =>
+                    setError("Contact an Admin to reset your password.")
+                  }
                 >
-                  ភ្លេច Password?
+                  Forgot password?
                 </button>
               </div>
               <div className="relative">
@@ -11205,32 +11452,33 @@ function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 pr-10 text-sm outline-none focus:border-signal-blue transition-colors"
+                  className="w-full rounded-xl border border-mist-200 bg-[#fbfcfe] px-4 py-3 pr-11 text-sm text-ink-900 outline-none transition-all placeholder:text-ink-600/35 focus:border-signal-blue focus:bg-white focus:ring-4 focus:ring-signal-blue/10"
                   autoComplete="current-password"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-600/40 hover:text-ink-700"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-600/40 transition-colors hover:text-ink-700"
                   tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
                 >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-ink-700 select-none cursor-pointer">
+            <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink-700">
               <input
                 type="checkbox"
                 checked={remember}
                 onChange={(e) => setRemember(e.target.checked)}
-                className="w-4 h-4 rounded-sm border-mist-200 text-signal-blue focus:ring-signal-blue"
+                className="h-4 w-4 rounded border-mist-200 text-signal-blue focus:ring-signal-blue"
               />
-              ចងចាំខ្ញុំ
+              Remember me
             </label>
 
             {error && (
-              <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
+              <div className="flex items-center gap-2 rounded-xl bg-signal-red/10 px-3 py-2.5 text-sm text-signal-red">
                 <TriangleAlert size={14} className="shrink-0" />
                 {error}
               </div>
@@ -11239,19 +11487,16 @@ function Login() {
             <button
               type="submit"
               disabled={submitting}
-              className="w-full flex items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-medium py-2.5 rounded-md hover:bg-signal-blue/90 transition-colors disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-signal-blue py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5 hover:bg-signal-blue/90 hover:shadow-blue-500/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
             >
-              {submitting ? "កំពុងចូល..." : "ចូលប្រើប្រាស់"}
-              {!submitting && <ArrowRight size={16} />}
+              {submitting ? "Signing in..." : "Sign in"}
+              {!submitting && <ArrowRight size={17} />}
             </button>
           </form>
+        </div>
 
-          <p className="text-center text-xs text-ink-600/45 mt-6">
-            មិនទាន់មានគណនី?{" "}
-            <Link to="/register" className="text-signal-blue hover:underline">
-              ចុះឈ្មោះថ្មី
-            </Link>
-          </p>
+        <div className="mt-5 text-center text-[11px] text-ink-600/40">
+          © 2026 Cargo Bridge Logistics
         </div>
       </div>
     </div>
@@ -11293,15 +11538,15 @@ function Register() {
     e.preventDefault();
     setError("");
     if (!form.name || !form.phone || !form.email || !form.password) {
-      setError("សូមបំពេញគ្រប់ចន្លោះទាំងអស់");
+      setError("សូមបំពេញគ្រប់ចន្លោះAll");
       return;
     }
     if (form.password.length < 6) {
-      setError("Password ត្រូវមានយ៉ាងតិច 6 តួអក្សរ");
+      setError("Password must be at least 6 characters.");
       return;
     }
     if (form.password !== form.confirm) {
-      setError("Password និង Confirm Password មិនត្រូវគ្នា");
+      setError("Password and Confirm Password do not match.");
       return;
     }
 
@@ -11315,7 +11560,7 @@ function Register() {
     setSubmitting(false);
 
     if (result.error) {
-      setError(result.error.message || "មានបញ្ហាក្នុងការចុះឈ្មោះ");
+      setError(result.error.message || "Registration failed.");
       return;
     }
     if (result.pendingConfirmation) {
@@ -11341,7 +11586,7 @@ function Register() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError("មិនអាចចម្លងបានទេ — សូមចម្លងដោយដៃ");
+      setError("Unable to copy. Please copy it manually.");
     }
   }
 
@@ -11353,19 +11598,19 @@ function Register() {
             <CircleCheck size={24} />
           </div>
           <h1 className="font-display font-bold text-xl text-ink-900">
-            សូមបញ្ជាក់ Email របស់អ្នក
+            Please confirm your email
           </h1>
           <p className="text-sm text-ink-600/55 mt-2 leading-relaxed">
-            យើងបានផ្ញើលីង Confirm ទៅកាន់{" "}
-            <span className="text-ink-900 font-medium">{form.email}</span>។
-            ចុចលីងនោះ រួច Login ចូលវិញ ដើម្បីទទួលបាន Customer ID និងអាសយដ្ឋាន
-            Warehouse របស់អ្នក។
+            We sent a confirmation link to{" "}
+            <span className="text-ink-900 font-medium">{form.email}</span>។ Open
+            the link and sign in again to receive your Customer ID and warehouse
+            address warehouse address.
           </p>
           <Link
             to="/login"
             className="inline-flex items-center gap-1.5 text-sm text-signal-blue hover:underline mt-6"
           >
-            ទៅកាន់ទំព័រ Login
+            Back to Login
             <ArrowRight size={15} />
           </Link>
         </div>
@@ -11382,11 +11627,11 @@ function Register() {
               <CircleCheck size={24} />
             </div>
             <h1 className="font-display font-bold text-xl text-ink-900">
-              ចុះឈ្មោះជោគជ័យ!
+              Registration successful!
             </h1>
             <p className="text-sm text-ink-600/55 mt-1">
-              គណនីរបស់អ្នកត្រូវបានបង្កើត — នេះជា Customer ID និងអាសយដ្ឋាន China
-              Warehouse របស់អ្នក
+              Your account has been created — here is your Customer ID and China
+              Warehouse address
             </p>
           </div>
 
@@ -11446,10 +11691,10 @@ function Register() {
               ) : (
                 <Copy size={15} />
               )}
-              {copied ? "បានចម្លង!" : "Copy Address"}
+              {copied ? "Copied!" : "Copy Address"}
             </button>
             <p className="text-xs text-ink-600/45 mt-2 text-center">
-              យក Address នេះទៅ Paste ក្នុង Taobao, 1688, Tmall, Pinduoduo ឬ JD
+              Copy this address into Taobao, 1688, Tmall, Pinduoduo, or JD
             </p>
           </div>
 
@@ -11457,7 +11702,7 @@ function Register() {
             onClick={() => navigate("/")}
             className="w-full flex items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-medium py-2.5 rounded-md hover:bg-signal-blue/90 transition-colors mt-5"
           >
-            ទៅកាន់ Dashboard
+            Go to Dashboard
             <ArrowRight size={16} />
           </button>
         </div>
@@ -11478,17 +11723,17 @@ function Register() {
         </div>
 
         <h1 className="font-display font-bold text-2xl text-ink-900">
-          ចុះឈ្មោះគណនីថ្មី
+          Create a new account
         </h1>
         <p className="text-sm text-ink-600/55 mt-1.5">
-          បង្កើតគណនី Customer ដើម្បីទទួលបាន Customer ID និងអាសយដ្ឋាន China
-          Warehouse ផ្ទាល់ខ្លួន។
+          Create a customer account to receive your Customer ID and China
+          warehouse address.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1.5">
-              ឈ្មោះពេញ / ឈ្មោះហាង
+              Full name / Shop name
             </label>
             <input
               value={form.name}
@@ -11500,7 +11745,7 @@ function Register() {
 
           <div>
             <label className="block text-xs font-medium text-ink-700 mb-1.5">
-              លេខទូរស័ព្ទ
+              Phone number
             </label>
             <input
               value={form.phone}
@@ -11574,7 +11819,7 @@ function Register() {
             disabled={submitting}
             className="w-full flex items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-medium py-2.5 rounded-md hover:bg-signal-blue/90 transition-colors disabled:opacity-60"
           >
-            {submitting ? "កំពុងបង្កើតគណនី..." : "ចុះឈ្មោះ"}
+            {submitting ? "Creating account..." : "Sign up"}
             {!submitting && <ArrowRight size={16} />}
           </button>
         </form>
@@ -11584,7 +11829,7 @@ function Register() {
           className="flex items-center justify-center gap-1.5 text-sm text-ink-600/60 hover:text-ink-900 mt-6"
         >
           <ArrowLeft size={14} />
-          មានគណនីរួចហើយ? ចូលប្រើប្រាស់
+          Already have an account? Sign in
         </Link>
       </div>
     </div>
@@ -11753,14 +11998,14 @@ function Dashboard() {
               onClick={() => navigate("/packages")}
               className="text-xs font-medium text-signal-blue hover:underline"
             >
-              មើលទាំងអស់
+              View all
             </button>
           </div>
           {!dashReady ? (
             <SkeletonListRows rows={5} />
           ) : recent.length === 0 ? (
             <p className="text-sm text-ink-600/45 px-4 lg:px-5 py-6 text-center">
-              មិនទាន់មាន Activity ថ្មីៗនៅឡើយទេ
+              No recent activity yet.
             </p>
           ) : (
             <div className="divide-y divide-mist-100 cb-fade-in">
@@ -11795,7 +12040,7 @@ function Dashboard() {
           )}
         </div>
 
-        <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+        <div className="cb-surface cb-card">
           <div className="flex items-center justify-between px-4 lg:px-5 py-3.5 border-b border-mist-200">
             <h2 className="font-display font-bold text-sm text-ink-900">
               Exception Alerts
@@ -11806,7 +12051,7 @@ function Dashboard() {
             <SkeletonListRows rows={3} />
           ) : exceptions.length === 0 ? (
             <p className="text-sm text-ink-600/45 px-4 lg:px-5 py-6 text-center">
-              គ្មាន Exception បើកចំហនៅឡើយទេ
+              No open exceptions.
             </p>
           ) : (
             <div className="divide-y divide-mist-100 cb-fade-in">
@@ -11835,7 +12080,7 @@ function Dashboard() {
               onClick={() => navigate("/exceptions")}
               className="w-full text-xs font-medium text-center text-signal-blue hover:underline"
             >
-              ទៅកាន់ Exception Center
+              Open Exception Center
             </button>
           </div>
         </div>
@@ -11870,72 +12115,8 @@ function packageFallbackDetail(tk) {
   };
 }
 
-// Sample Shipment Lookup Data
-const SHIPMENT_LOOKUP_DATA = {
-  "SHP-202609-001": {
-    id: "SHP-202609-001",
-    customerName: "Sothon Shop",
-    customerId: "KH-000582",
-    route: "China → Cambodia",
-    vessel: "Ever Given / Voyage 2026-A",
-    tks: [
-      {
-        tk: "TK202609250041",
-        status: "In Transit",
-        fee: "$0.00",
-        weight: "12.5 KG",
-      },
-      {
-        tk: "TK202609250040",
-        status: "In Transit",
-        fee: "$0.00",
-        weight: "8.3 KG",
-      },
-      {
-        tk: "TK202609250039",
-        status: "In Transit",
-        fee: "$0.00",
-        weight: "15.8 KG",
-      },
-    ],
-  },
-  "SHP-202609-002": {
-    id: "SHP-202609-002",
-    customerName: "Dara Trading",
-    customerId: "KH-000117",
-    route: "China → Cambodia",
-    vessel: "Maersk Semarang / Voyage 2026-B",
-    tks: [
-      {
-        tk: "TK202609250035",
-        status: "In Transit",
-        fee: "$0.00",
-        weight: "6.2 KG",
-      },
-    ],
-  },
-  "SHP-202609-003": {
-    id: "SHP-202609-003",
-    customerName: "Chenda Mart",
-    customerId: "KH-000721",
-    route: "China → Cambodia",
-    vessel: "CMA CGM Antoine / Voyage 2026-C",
-    tks: [
-      {
-        tk: "TK202609250032",
-        status: "Arrived",
-        fee: "$0.00",
-        weight: "9.7 KG",
-      },
-      {
-        tk: "TK202609250031",
-        status: "Arrived",
-        fee: "$0.00",
-        weight: "11.2 KG",
-      },
-    ],
-  },
-};
+// Live registry only — no sample shipments.
+const SHIPMENT_LOOKUP_DATA = {};
 
 // Matches Customer ID against the "CUS-ID · Name" shape every package's
 // `customer` field is stored in (see PackageTrackingProvider / TransferOrderModal).
@@ -12015,7 +12196,7 @@ function ShipmentLookup() {
     setSearched(true);
   }
 
-  // A search launched from the header ("ស្វែងរក TK, Order, Container...")
+  // A search launched from the header ("Search TK, Order, Container...")
   // lands here as ?q=..., so run it once on arrival.
   useEffect(() => {
     const q = searchParams.get("q");
@@ -12036,7 +12217,7 @@ function ShipmentLookup() {
       <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
         <div className="space-y-4">
           <label className="block text-sm font-medium text-ink-700 mb-2">
-            ស្វែងរកតាម Customer ID, TK, Order ID, Name ឬ Shipment ID
+            Search by Customer ID, TK, Order ID, Name, or Shipment ID
           </label>
           <div className="flex gap-3 flex-wrap">
             <input
@@ -12052,7 +12233,7 @@ function ShipmentLookup() {
               className="px-6 py-2 bg-signal-blue text-white rounded-md text-sm font-medium hover:bg-signal-blue/90 transition"
             >
               <Search size={16} className="inline mr-1.5" />
-              ស្វែងរក
+              Search
             </button>
           </div>
         </div>
@@ -12060,7 +12241,7 @@ function ShipmentLookup() {
 
       {noResults && (
         <div className="bg-white border border-dashed border-mist-300 rounded-md p-8 text-center">
-          <p className="text-ink-600/60">គ្មានលទ្ធផលស្វែងរក</p>
+          <p className="text-ink-600/60">គ្មានលទ្ធផលSearch</p>
         </div>
       )}
 
@@ -12075,7 +12256,7 @@ function ShipmentLookup() {
             </div>
           </div>
 
-          <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+          <div className="cb-surface cb-card">
             <div className="px-5 py-3.5 border-b border-mist-200">
               <h2 className="font-display font-bold text-sm text-ink-900">
                 Order List ({orderResults.length})
@@ -12107,7 +12288,7 @@ function ShipmentLookup() {
             <div className="space-y-4">
               <div>
                 <h2 className="font-display font-bold text-lg text-ink-900 mb-3">
-                  ព័ត័មាន Shipment
+                  Shipment information
                 </h2>
                 <div className="grid md:grid-cols-2 gap-4">
                   <InfoGrid
@@ -12147,7 +12328,7 @@ function ShipmentLookup() {
             </div>
           </div>
 
-          <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+          <div className="cb-surface cb-card">
             <div className="px-5 py-3.5 border-b border-mist-200">
               <h2 className="font-display font-bold text-sm text-ink-900">
                 TK List in Shipment ({shipmentResult.tks.length})
@@ -12246,7 +12427,7 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
       onTransferred?.(toLabel);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាច Transfer បានទេ");
+      setError(err.message || "Unable to transfer.");
     } finally {
       setSaving(false);
     }
@@ -12305,11 +12486,12 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
             onQueryChange={setQuery}
             matched={selectedCustomer}
             loading={customerLoading}
-            noteText="ការផ្ទេរនេះកើតឡើងភ្លាមៗ — TK នឹងបាត់ចេញពី Customer ដើម ហើយបង្ហាញនៅ Customer ថ្មីភ្លាមៗ។"
+            noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
           />
           {selectedCustomer && sameCustomer && (
             <p className="text-xs text-signal-red">
-              Customer នេះជា Customer ដដែលរួចហើយ — សូមជ្រើសរើសផ្សេង
+              This is already the same customer — please choose a different
+              customer.
             </p>
           )}
 
@@ -12331,14 +12513,14 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             type="submit"
             disabled={!canSubmit || saving}
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {saving ? "កំពុង Transfer..." : "Confirm"}
+            {saving ? "Transferring..." : "Confirm"}
           </button>
         </div>
       </form>
@@ -12385,7 +12567,7 @@ function EditPackageModal({ open, pkg, onClose }) {
     if (f.weight !== "" && !(Number(f.weight) > 0))
       return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
     if (!String(f.reason).trim())
-      return setError("សូមបញ្ចូលមូលហេតុនៃការកែ (Reason)");
+      return setError("សូមបញ្ចូលReason for adjustment (Reason)");
     const dimsEntered = [f.length, f.width, f.height].some(
       (v) => String(v).trim() !== "",
     );
@@ -12437,7 +12619,7 @@ function EditPackageModal({ open, pkg, onClose }) {
       );
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -12522,7 +12704,7 @@ function EditPackageModal({ open, pkg, onClose }) {
               />
             </div>
             <div className="col-span-2">
-              <label className={LABEL_CLS}>ចំនួនកញ្ចប់ (Package Qty)</label>
+              <label className={LABEL_CLS}>Package Quantity</label>
               <input
                 className={INPUT_CLS}
                 type="number"
@@ -12555,12 +12737,12 @@ function EditPackageModal({ open, pkg, onClose }) {
               className={INPUT_CLS}
               value={f.reason ?? ""}
               onChange={set("reason")}
-              placeholder="មូលហេតុនៃការកែ"
+              placeholder="Reason for adjustment"
             />
           </div>
           <p className="text-[11px] text-ink-600/45">
-            CBM គណនាពី L × W × H ។ Freight Fee គណនាឡើងវិញដោយស្វ័យប្រវត្តិ
-            លើកលែងតែ Fee ដែលបាន Override ដោយដៃ។
+            CBM is calculated from L × W × H. Freight Fee is recalculated
+            automatically unless the fee is manually overridden.
           </p>
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
@@ -12576,7 +12758,7 @@ function EditPackageModal({ open, pkg, onClose }) {
             disabled={saving}
             className="bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
           >
-            {saving ? "កំពុងរក្សាទុក..." : "Save"}
+            {saving ? "កំពុងSave..." : "Save"}
           </button>
         </div>
       </form>
@@ -12611,7 +12793,7 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
       await deletePackage(tk);
       onDeleted();
     } catch (err) {
-      setError(err.message || "មិនអាចលុបបានទេ");
+      setError(err.message || "Unable to delete.");
     } finally {
       setBusy(false);
     }
@@ -12632,11 +12814,11 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
         </div>
         <div className="px-5 py-4 space-y-3 text-sm text-ink-700">
           <p>
-            តើអ្នកប្រាកដថាចង់លុប <b>{tk}</b> ជាអចិន្ត្រៃយ៍មែនទេ?
-            សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។
+            Are you sure you want to permanently delete <b>{tk}</b>{" "}
+            ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
           </p>
           <div>
-            <label className={LABEL_CLS}>វាយ TK ដើម្បីបញ្ជាក់</label>
+            <label className={LABEL_CLS}>Enter TK to confirm</label>
             <input
               className={INPUT_CLS}
               value={typed}
@@ -12660,7 +12842,7 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
             onClick={confirm}
             className="bg-signal-red text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-red/90 disabled:opacity-50"
           >
-            {busy ? "កំពុងលុប..." : "Delete"}
+            {busy ? "Deleting..." : "Delete"}
           </button>
         </div>
       </div>
@@ -12718,9 +12900,9 @@ function TrackingHistoryModal({ open, onClose, steps }) {
 // ------------------------------------------------------------
 // components/PrintLabelModal.jsx — Print Label (Arrived Destination)
 // ------------------------------------------------------------
-// ស្លាកកញ្ចប់សម្រាប់ TK ដែលមកដល់ខ្មែរ។ Order មាន 1 កញ្ចប់ → "1 / 1";
-// មាន 2 កញ្ចប់ឡើងទៅ → 1 / 2, 2 / 2 … ហើយចុច Prev / Next ដើម្បីប្តូរទៅស្លាកផ្សេង
-// ឬ Print All ម្តងទាំងអស់។   Needs:  npm i jsbarcode qrcode
+// ស្លាកPackageសម្រាប់ TK ដែលមកដល់ខ្មែរ។ Order មាន 1 Package → "1 / 1";
+// មាន 2 Packageឡើងទៅ → 1 / 2, 2 / 2 … ហើយចុច Prev / Next ដើម្បីប្តូរទៅស្លាកផ្សេង
+// ឬ Print All ម្តងAll។   Needs:  npm i jsbarcode qrcode
 // Label size: change LABEL_W_MM / LABEL_H_MM to match your sticker roll.
 const LABEL_W_MM = 120;
 const LABEL_H_MM = 100;
@@ -12895,7 +13077,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
   const [cont, setCont] = useState(null);
   const [err, setErr] = useState("");
 
-  // ចំនួនកញ្ចប់ = ចំនួនកញ្ចប់ក្នុង TK នេះ (package_count, លំនាំដើម 1)
+  // ចំនួនPackage = ចំនួនPackageក្នុង TK នេះ (package_count, លំនាំដើម 1)
   const ono = pkg?.order_no || pkg?.order;
   const total = Math.max(1, Math.floor(Number(pkg?.package_count)) || 1);
   const cur = pkg;
@@ -13000,7 +13182,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
         pages.push(labelPageHtml(dataFor(cur, i, c), k));
       printHtmlHidden(labelDocHtml(pages.join(""), `Labels ${ono || ""}`));
     } catch {
-      setErr("មិនអាច Print ទាំងអស់បានទេ");
+      setErr("មិនអាច Print Allបានទេ");
     }
   }
 
@@ -13041,7 +13223,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
               Prev
             </button>
             <span className="text-sm text-ink-700">
-              កញ្ចប់ <b>{curIdx + 1}</b> / {total} · {cur.tk}
+              Package <b>{curIdx + 1}</b> / {total} · {cur.tk}
             </span>
             <button
               type="button"
@@ -13059,7 +13241,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
           {err ? (
             <p className="text-sm text-signal-red py-10">{err}</p>
           ) : !codes ? (
-            <p className="text-sm text-ink-600/50 py-10">កំពុងរៀបចំ Label…</p>
+            <p className="text-sm text-ink-600/50 py-10">Preparing label…</p>
           ) : (
             <iframe
               title="label-preview"
@@ -13207,7 +13389,7 @@ function PackageDetail() {
     return (
       <DetailPageSkeleton
         backTo="/packages"
-        backLabel="ត្រឡប់ទៅ Packages / TK"
+        backLabel="Back to Packages / TK"
       />
     );
 
@@ -13219,12 +13401,12 @@ function PackageDetail() {
           className="inline-flex items-center gap-1.5 text-sm text-ink-600/60 hover:text-ink-900"
         >
           <ArrowLeft size={15} />
-          ត្រឡប់ទៅ Packages / TK
+          Back to Packages / TK
         </Link>
         <div className="bg-white border border-mist-200 rounded-md shadow-panel py-16 flex flex-col items-center text-center">
           <Icons.Lock size={32} className="text-ink-600/20 mb-3" />
           <p className="text-sm text-ink-600/55">
-            អ្នកមិនមានសិទ្ធិមើល TK នេះទេ
+            You do not have permission to view this TK.
           </p>
         </div>
       </div>
@@ -13240,13 +13422,13 @@ function PackageDetail() {
           className="flex items-center gap-1.5 bg-signal-blue text-white text-xs font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
         >
           <ChevronRight size={14} />
-          ដំណើរការទៅ Status បន្ទាប់
+          Process to next status
         </button>
       )}
       {!isComplete && !gatedStage && !isInboundStage && !canProcessStatus && (
         <span className="flex items-center gap-1.5 text-xs font-medium text-ink-600/45">
           <Eye size={14} />
-          សម្រាប់មើលប៉ុណ្ណោះ — Super Admin ប៉ុណ្ណោះទើបអាច Process បាន
+          View only — only Super Admin can process this.
         </span>
       )}
       {!isComplete &&
@@ -13263,13 +13445,13 @@ function PackageDetail() {
         ) : (
           <span className="flex items-center gap-1.5 text-xs font-medium text-[#B87415]">
             <TriangleAlert size={14} />
-            ត្រូវ Inbound Status = Ready for Shipment សិន
+            Inbound Status must be Ready for Shipment first.
           </span>
         ))}
       {!isComplete && isInboundStage && !canManageInbound && (
         <span className="flex items-center gap-1.5 text-xs font-medium text-ink-600/45">
           <Eye size={14} />
-          សម្រាប់មើលប៉ុណ្ណោះ
+          View only
         </span>
       )}
       {!isComplete && gatedStage && (
@@ -13285,7 +13467,7 @@ function PackageDetail() {
               className="flex items-center gap-1.5 bg-signal-blue text-white text-xs font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60 whitespace-nowrap"
             >
               <ChevronRight size={14} />
-              ដំណើរការទៅ Status បន្ទាប់
+              Process to next status
             </button>
           )}
         </div>
@@ -13740,7 +13922,7 @@ function PackageDetail() {
                     ? [
                         {
                           label: "Note",
-                          value: "Override ដោយ Admin",
+                          value: "Admin override",
                           span: true,
                         },
                       ]
@@ -13909,7 +14091,7 @@ function OrderDetail() {
         className="inline-flex items-center gap-1.5 text-sm text-ink-600/60 hover:text-ink-900"
       >
         <ArrowLeft size={15} />
-        ត្រឡប់ទៅ Orders
+        Back to Orders
       </Link>
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -13991,7 +14173,7 @@ function OrderDetail() {
           {(data.shipment || data.container) && (
             <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
               <h2 className="font-display font-bold text-sm text-ink-900 mb-4">
-                ការដឹកជញ្ជូន
+                Shipping
               </h2>
               <InfoGrid
                 items={[
@@ -14019,10 +14201,10 @@ function OrderDetail() {
         </div>
       </div>
 
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel">
+      <div className="cb-surface cb-card">
         <div className="px-4 lg:px-5 py-3.5 border-b border-mist-200">
           <h2 className="font-display font-bold text-sm text-ink-900">
-            ផលិតផលក្នុង Order ({data.products.length})
+            Products in Order ({data.products.length})
           </h2>
         </div>
         <DataTable
@@ -14358,7 +14540,7 @@ async function saveContainerPhotos(container, photos, extra = {}) {
       ...stamped,
     ]);
   } catch (err) {
-    warning = `មិនអាចរក្សាទុករូបភាពក្នុង browser បានទេ: ${err.message}`;
+    warning = `មិនអាចSaveរូបភាពក្នុង browser បានទេ: ${err.message}`;
   }
   if (supabase) {
     try {
@@ -14426,7 +14608,7 @@ function checkTkForContainer({
   const bad = (error, kind = "invalid") => ({ ok: false, pkg, error, kind });
 
   // 1. TK exists
-  if (!pkg) return bad(`រកមិនឃើញ TK "${String(raw).trim()}" ក្នុងប្រព័ន្ធទេ`);
+  if (!pkg) return bad(`TK not found "${String(raw).trim()}" ក្នុងប្រព័ន្ធទេ`);
 
   // 2. not already in THIS container
   const here = tkRowsFor(container, activeItems, packages);
@@ -14472,7 +14654,8 @@ function checkTkForContainer({
     );
 
   // 7. eligible for outbound shipment
-  if (pkg.exception) return bad(`TK ${pkg.tk} មាន Exception ត្រូវដោះស្រាយមុន`);
+  if (pkg.exception)
+    return bad(`TK ${pkg.tk} មាន Exception ត្រូវដោះស្រាយPrevious`);
   if (pkg.status && pkg.status !== "Inbound Origin")
     return bad(
       `TK ${pkg.tk} មិនអាចផ្ញើបានទេ (Status បច្ចុប្បន្ន: ${pkg.status})`,
@@ -14727,7 +14910,11 @@ function useContainerStore() {
       throw new Error("Container នេះមិនអាចកែបានទេ");
     checkFields(v);
     await saveContainer(container, clean(v));
-    await logEvent(container.id, "Container Edited", "កែព័ត៌មាន Container");
+    await logEvent(
+      container.id,
+      "Container Edited",
+      "Edit container information",
+    );
   }
 
   // Super Admin only: edit a Container in ANY status (the normal edit is
@@ -14736,14 +14923,14 @@ function useContainerStore() {
     requirePermission(
       user,
       "container.edit",
-      "អ្នកគ្មានសិទ្ធិកែ Container នេះទេ",
+      "You do not have permission to edit this container.",
     );
     checkFields(v);
     await saveContainer(container, clean(v));
     await logEvent(
       container.id,
       "Container Edited",
-      "Super Admin កែព័ត៌មាន Container",
+      "Super Admin Edit container information",
     );
   }
 
@@ -14753,7 +14940,7 @@ function useContainerStore() {
     requirePermission(
       user,
       "container.delete",
-      "អ្នកគ្មានសិទ្ធិលុប Container ទេ",
+      "You do not have permission to delete containers.",
     );
     const releasing = tkRowsFor(container, activeItems, packages);
     if (supabase) {
@@ -14796,7 +14983,7 @@ function useContainerStore() {
       !hasPermission(user, "container.manage") &&
       !hasPermission(user, "container.receive")
     )
-      throw new Error("អ្នកគ្មានសិទ្ធិធ្វើសកម្មភាពនេះទេ");
+      throw new Error("You do not have permission to perform this action.");
     if (next === "Cancelled" && !String(reason || "").trim())
       throw new Error("សូមបញ្ចូលមូលហេតុ");
     const releasing =
@@ -14838,14 +15025,14 @@ function useContainerStore() {
 
   function assertManage() {
     if (!hasPermission(user, "container.manage"))
-      throw new Error("អ្នកគ្មានសិទ្ធិធ្វើសកម្មភាពនេះទេ");
+      throw new Error("You do not have permission to perform this action.");
   }
 
   // PHASE 3 — Seal: needs a Seal Number and at least one TK.
   async function sealContainer(container, sealNumber) {
     assertManage();
     if (container.status !== "Loaded")
-      throw new Error("ត្រូវ Mark Loaded មុន ទើប Seal បាន");
+      throw new Error("ត្រូវ Mark Loaded Previous ទើប Seal បាន");
     const seal = String(sealNumber || "")
       .trim()
       .toUpperCase();
@@ -14862,7 +15049,8 @@ function useContainerStore() {
     )
       throw new Error(`Seal "${seal}" ត្រូវបានប្រើក្នុង Container ផ្សេងរួចហើយ`);
     const n = tkRowsFor(container, activeItems, packages).length;
-    if (n < 1) throw new Error("Container ត្រូវមាន TK យ៉ាងហោចណាស់ 1 មុន Seal");
+    if (n < 1)
+      throw new Error("Container ត្រូវមាន TK យ៉ាងហោចណាស់ 1 Previous Seal");
     await saveContainer(container, {
       status: "Sealed",
       seal_number: seal,
@@ -14877,7 +15065,7 @@ function useContainerStore() {
     requirePermission(
       user,
       "container.break_seal",
-      "អ្នកគ្មានសិទ្ធិបើក Seal ទេ",
+      "You do not have permission to break the seal.",
     );
     if (container.status !== "Sealed")
       throw new Error("Container មិនស្ថិតក្នុង Sealed");
@@ -14972,7 +15160,9 @@ function useContainerStore() {
       containerStage(container.status) < 2 ||
       container.status === "Arrived Destination"
     )
-      throw new Error("Container ត្រូវចេញពីឃ្លាំងចិនមុន ទើបបញ្ជាក់មកដល់បាន");
+      throw new Error(
+        "Container ត្រូវចេញពីឃ្លាំងចិនPrevious ទើបConfirmមកដល់បាន",
+      );
     if (!whIsActive(whRows, container.dest_wh_code, "cambodia"))
       throw new Error("Destination Cambodia Branch មិនមាន ឬមិន Active");
     const now = new Date().toISOString();
@@ -14993,7 +15183,7 @@ function useContainerStore() {
       throw new Error("អ្នកគ្មានសិទ្ធិកែ TK ក្នុង Container ទេ");
     if (!CONTAINER_TK_EDITABLE.includes(container.status))
       throw new Error(
-        `Container ស្ថិតក្នុង ${container.status} — មិនអាចបន្ថែម/ដក TK បានទេ`,
+        `Container ស្ថិតក្នុង ${container.status} — មិនអាចបន្ថែម/Remove TK បានទេ`,
       );
   }
 
@@ -15171,7 +15361,7 @@ function useContainerStore() {
       !hasPermission(user, "container.manage") &&
       !hasPermission(user, "container.receive")
     )
-      throw new Error("អ្នកគ្មានសិទ្ធិធ្វើសកម្មភាពនេះទេ");
+      throw new Error("You do not have permission to perform this action.");
     if (supabase && !p6Ready) throw new Error(CONTAINER_P6_HINT);
   }
 
@@ -15204,9 +15394,9 @@ function useContainerStore() {
         `Container ស្ថិតក្នុង ${container.status} — មិនអាចរាយការណ៍ Exception បានទេ`,
       );
     if (!CONTAINER_EXCEPTION_TYPES.includes(type))
-      throw new Error("សូមជ្រើសរើសប្រភេទ Exception");
+      throw new Error("សូមជ្រើសរើសException Type");
     const note = String(detail || "").trim();
-    if (!note) throw new Error("សូមបញ្ចូលព័ត៌មានលម្អិតនៃ Exception");
+    if (!note) throw new Error("សូមបញ្ចូលDetailsនៃ Exception");
     const pics = photos || [];
     if (CONTAINER_EXCEPTION_PHOTO_REQUIRED.includes(type) && !pics.length)
       throw new Error(`${type} ត្រូវការរូបភាពជាភស្តុតាងយ៉ាងតិច ១ សន្លឹក`);
@@ -15215,7 +15405,7 @@ function useContainerStore() {
     const rawTk = String(tk || "").trim();
     if (rawTk) {
       pkg = packages.find((p) => tkKey(p.tk) === tkKey(rawTk)) || null;
-      if (!pkg) throw new Error(`រកមិនឃើញ TK "${rawTk}" ក្នុងប្រព័ន្ធ`);
+      if (!pkg) throw new Error(`TK not found "${rawTk}" ក្នុងប្រព័ន្ធ`);
       const inside = tkRowsFor(container, activeItems, packages).some(
         (p) => tkKey(p.tk) === tkKey(pkg.tk),
       );
@@ -15368,7 +15558,7 @@ function useContainerStore() {
       throw new Error("Container ទាំងពីរត្រូវមាន Destination ដូចគ្នា");
 
     const pkg = packages.find((p) => tkKey(p.tk) === tkKey(tk));
-    if (!pkg) throw new Error(`រកមិនឃើញ TK "${tk}"`);
+    if (!pkg) throw new Error(`TK not found "${tk}"`);
     const inFrom = tkRowsFor(from, activeItems, packages).some(
       (p) => tkKey(p.tk) === tkKey(pkg.tk),
     );
@@ -15490,7 +15680,7 @@ function useContainerStore() {
         setTransfers((p) => [{ id: makeId(), ...rec, created_at: now }, ...p]);
       }
     } catch (e) {
-      warning = `TK ត្រូវបានផ្ទេរ ប៉ុន្តែមិនអាចរក្សាទុក Transfer History: ${e.message}`;
+      warning = `TK ត្រូវបានផ្ទេរ ប៉ុន្តែមិនអាចSave Transfer History: ${e.message}`;
     }
     logStatus(
       pkg.tk,
@@ -15578,7 +15768,7 @@ function ConfirmModal({
   open,
   title,
   message,
-  confirmLabel = "បញ្ជាក់",
+  confirmLabel = "Confirm",
   danger,
   askReason,
   onConfirm,
@@ -15644,7 +15834,7 @@ function ConfirmModal({
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
           <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            បោះបង់
+            Cancel
           </button>
           <button
             type="button"
@@ -15652,7 +15842,7 @@ function ConfirmModal({
             onClick={go}
             className={danger ? CT_BTN_DANGER : CT_BTN_PRIMARY}
           >
-            {busy ? "កំពុងដំណើរការ..." : confirmLabel}
+            {busy ? "Processing..." : confirmLabel}
           </button>
         </div>
       </div>
@@ -15703,7 +15893,7 @@ function ContainerFormModal({ open, existing, whRows, onClose, onSave }) {
       await onSave(v, existing);
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចរក្សាទុកបានទេ");
+      setError(err.message || "មិនអាចSaveបានទេ");
     } finally {
       setSaving(false);
     }
@@ -15847,10 +16037,10 @@ function ContainerFormModal({ open, existing, whRows, onClose, onSave }) {
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
           <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            បោះបង់
+            Cancel
           </button>
           <button type="submit" disabled={saving} className={CT_BTN_PRIMARY}>
-            {saving ? "កំពុងរក្សាទុក..." : "រក្សាទុក"}
+            {saving ? "កំពុងSave..." : "Save"}
           </button>
         </div>
       </form>
@@ -15985,7 +16175,7 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
         <div className="p-5 space-y-4 overflow-y-auto">
           <div>
             <label className={LABEL_CLS}>
-              Scan TK (ឬបិទភ្ជាប់ TK ច្រើន បំបែកដោយ ដកឃ្លា/ជួរ/សញ្ញាក្បៀស)
+              Scan TK (ឬCloseភ្ជាប់ TK ច្រើន បំបែកដោយ ដកឃ្លា/ជួរ/សញ្ញាក្បៀស)
             </label>
             <div className="flex gap-2">
               <input
@@ -16027,11 +16217,11 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
           </div>
 
           <div>
-            <label className={LABEL_CLS}>ឬស្វែងរក TK / Order / Customer</label>
+            <label className={LABEL_CLS}>ឬSearch TK / Order / Customer</label>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="ស្វែងរក TK ដែលអាចដាក់បាន..."
+              placeholder="Search TK ដែលអាចដាក់បាន..."
               className={INPUT_CLS}
             />
             {results.length > 0 && (
@@ -16065,7 +16255,7 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
             )}
             {q.trim() && results.length === 0 && (
               <p className="text-[11px] text-ink-600/50 mt-1">
-                មិនមាន TK ដែលអាចដាក់បានត្រូវនឹងការស្វែងរកនេះទេ
+                មិនមាន TK ដែលអាចដាក់បានត្រូវនឹងការSearchនេះទេ
               </p>
             )}
           </div>
@@ -16160,7 +16350,7 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
             })}
             {list.length === 0 && (
               <div className="px-3 py-8 text-center text-sm text-ink-600/40">
-                Scan ឬស្វែងរក TK ដើម្បីចាប់ផ្ដើម
+                Scan ឬSearch TK ដើម្បីចាប់ផ្ដើម
               </div>
             )}
           </div>
@@ -16168,7 +16358,7 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
 
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
           <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            បោះបង់
+            Cancel
           </button>
           <button
             type="button"
@@ -16176,7 +16366,7 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
             onClick={confirm}
             className={CT_BTN_PRIMARY}
           >
-            {busy ? "កំពុងបន្ថែម..." : `Confirm Add (${valid.length} TK)`}
+            {busy ? "Adding..." : `Confirm Add (${valid.length} TK)`}
           </button>
         </div>
       </div>
@@ -16225,7 +16415,7 @@ function SealModal({ open, container, tkCount, by, onSeal, onClose }) {
         </div>
         <div className="p-5 space-y-3.5">
           <p className="text-sm text-ink-700">
-            បន្ទាប់ពី Seal បញ្ជី TK ({tkCount} TK) នឹងត្រូវបានចាក់សោ។
+            Nextពី Seal បញ្ជី TK ({tkCount} TK) នឹងត្រូវបានចាក់សោ។
           </p>
           <div>
             <label className={LABEL_CLS}>Seal Number *</label>
@@ -16264,10 +16454,10 @@ function SealModal({ open, container, tkCount, by, onSeal, onClose }) {
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
           <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            បោះបង់
+            Cancel
           </button>
           <button type="submit" disabled={busy} className={CT_BTN_PRIMARY}>
-            {busy ? "កំពុង Seal..." : "Seal Container"}
+            {busy ? "Sealing..." : "Seal Container"}
           </button>
         </div>
       </form>
@@ -16298,9 +16488,9 @@ function ArrivalProgressCard({ tks }) {
         <div className="h-full bg-signal-blue" style={{ width: `${pct}%` }} />
       </div>
       <p className="text-xs text-ink-600/60">
-        Container មកដល់ឃ្លាំងហើយ មិនមានន័យថា TK ទាំងអស់ Arrived ទេ។ TK ប្តូរជា
-        Arrived តែពេលឃ្លាំងឆែកទំនិញពេលទម្លាក់ ហើយ Scan នៅ W.H Arrived → Scan
-        Arrive V2 ប៉ុណ្ណោះ។
+        A container arriving at the warehouse does not mean all TKs have
+        arrived. TK ប្តូរជា Arrived តែពេលឃ្លាំងឆែកទំនិញពេលទម្លាក់ ហើយ Scan នៅ
+        W.H Arrived → Scan Arrive V2 ប៉ុណ្ណោះ។
       </p>
     </div>
   );
@@ -16386,7 +16576,7 @@ function ContainerExceptionModal({
       onDone(res);
       onClose();
     } catch (e) {
-      setErr(e.message || "មិនអាចរាយការណ៍បានទេ");
+      setErr(e.message || "Unable to report.");
       setBusy(false);
     }
   }
@@ -16398,7 +16588,7 @@ function ContainerExceptionModal({
       footer={
         <>
           <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            បោះបង់
+            Cancel
           </button>
           <button
             type="button"
@@ -16406,13 +16596,13 @@ function ContainerExceptionModal({
             onClick={go}
             className={CT_BTN_DANGER}
           >
-            {busy ? "កំពុងរក្សាទុក..." : "Report Exception"}
+            {busy ? "កំពុងSave..." : "Report Exception"}
           </button>
         </>
       }
     >
       <div>
-        <label className={LABEL_CLS}>ប្រភេទ Exception *</label>
+        <label className={LABEL_CLS}>Exception Type *</label>
         <select
           value={type}
           onChange={(e) => setType(e.target.value)}
@@ -16439,7 +16629,7 @@ function ContainerExceptionModal({
         </datalist>
       </div>
       <div>
-        <label className={LABEL_CLS}>ព័ត៌មានលម្អិត *</label>
+        <label className={LABEL_CLS}>Details *</label>
         <textarea
           rows={3}
           value={detail}
@@ -16458,7 +16648,7 @@ function ContainerExceptionModal({
           emptyHint={
             photoRequired
               ? "ត្រូវការរូបភាពយ៉ាងតិច ១ សន្លឹកជាភស្តុតាង"
-              : "មិនទាន់មានរូបភាព"
+              : "No images yet"
           }
         />
       </div>
@@ -16484,7 +16674,7 @@ function ContainerExceptionsCard({ container, store, canP6, onAsk, onReport }) {
           Exceptions ({rows.length})
           {open > 0 && (
             <span className="ml-2 text-xs font-medium text-signal-red">
-              {open} មិនទាន់ដោះស្រាយ
+              {open} Unresolved
             </span>
           )}
         </h2>
@@ -16502,7 +16692,7 @@ function ContainerExceptionsCard({ container, store, canP6, onAsk, onReport }) {
         </div>
       )}
       {rows.length === 0 ? (
-        <p className="text-sm text-ink-600/40">មិនទាន់មាន Exception ទេ</p>
+        <p className="text-sm text-ink-600/40">No exceptions yet.</p>
       ) : (
         <div className="divide-y divide-mist-100">
           {rows.map((e) => (
@@ -16529,7 +16719,7 @@ function ContainerExceptionsCard({ container, store, canP6, onAsk, onReport }) {
                     onClick={() =>
                       onAsk({
                         title: "Resolve Exception",
-                        message: `${e.type}${e.tk ? ` · TK ${e.tk}` : ""} — បញ្ជាក់ថាបានដោះស្រាយ? សូមបញ្ចូលវិធីដោះស្រាយខាងក្រោម។`,
+                        message: `${e.type}${e.tk ? ` · TK ${e.tk}` : ""} — Confirmថាបានដោះស្រាយ? សូមបញ្ចូលវិធីដោះស្រាយខាងក្រោម។`,
                         confirmLabel: "Resolve",
                         askReason: true,
                         onConfirm: (text) =>
@@ -16585,11 +16775,9 @@ function ContainerPhotosCard({ container, store, canP6, onFlash }) {
     try {
       const res = await store.addPhotos(container, pending);
       setPending([]);
-      onFlash(
-        res.warning ? `រក្សាទុករូបភាព — ${res.warning}` : "បានរក្សាទុករូបភាព",
-      );
+      onFlash(res.warning ? `Saveរូបភាព — ${res.warning}` : "Images saved");
     } catch (e) {
-      setErr(e.message || "មិនអាចរក្សាទុករូបភាពបានទេ");
+      setErr(e.message || "Unable to save images.");
     } finally {
       setBusy(false);
     }
@@ -16611,7 +16799,7 @@ function ContainerPhotosCard({ container, store, canP6, onFlash }) {
       {photos === null ? (
         <SkeletonPhotoGrid count={4} className="sm:grid-cols-4" />
       ) : photos.length === 0 ? (
-        <p className="text-sm text-ink-600/40">មិនទាន់មានរូបភាពទេ</p>
+        <p className="text-sm text-ink-600/40">No images yetទេ</p>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           {photos.map((p, i) => (
@@ -16650,7 +16838,7 @@ function ContainerPhotosCard({ container, store, canP6, onFlash }) {
             photos={pending}
             setPhotos={setPending}
             categories={CONTAINER_PHOTO_CATEGORIES}
-            emptyHint="ថត ឬ Upload រូបភាព Container (ទ្វារ, Seal, ការផ្ទុក, ការបញ្ចេញ...)"
+            emptyHint="Capture or upload container photos (ទ្វារ, Seal, ការផ្ទុក, ការបញ្ចេញ...)"
           />
           <ContainerErrorLine text={err} />
           {pending.length > 0 && (
@@ -16661,7 +16849,7 @@ function ContainerPhotosCard({ container, store, canP6, onFlash }) {
               className={CT_BTN_PRIMARY}
             >
               <Save size={14} />
-              {busy ? "កំពុង Upload..." : `រក្សាទុករូបភាព (${pending.length})`}
+              {busy ? "Uploading..." : `Saveរូបភាព (${pending.length})`}
             </button>
           )}
         </div>
@@ -16750,7 +16938,7 @@ function TransferTkModal({
   let hintBad = false;
   if (!out && tkValue) {
     if (!pkg) {
-      hint = `រកមិនឃើញ TK "${tkValue}" ក្នុងប្រព័ន្ធ`;
+      hint = `TK not found "${tkValue}" ក្នុងប្រព័ន្ធ`;
       hintBad = true;
     } else if (!src) {
       hint = `TK ${pkg.tk} មិនស្ថិតក្នុង Container ណាមួយទេ`;
@@ -16772,7 +16960,7 @@ function TransferTkModal({
     try {
       if (!pkg) throw new Error("សូមបញ្ចូល TK ឲ្យត្រឹមត្រូវ");
       if (!from) throw new Error("រកមិនឃើញ Container ដើមរបស់ TK នេះទេ");
-      if (!to) throw new Error("សូមជ្រើសរើស Container គោលដៅ");
+      if (!to) throw new Error("សូមជ្រើសរើស Destination Container");
       const res = await store.transferTk(from, to, pkg.tk, reason, photos);
       onDone(res, from, to);
       onClose();
@@ -16789,7 +16977,7 @@ function TransferTkModal({
       footer={
         <>
           <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            បោះបង់
+            Cancel
           </button>
           <button
             type="button"
@@ -16797,7 +16985,7 @@ function TransferTkModal({
             onClick={go}
             className={CT_BTN_PRIMARY}
           >
-            {busy ? "កំពុងផ្ទេរ..." : "Transfer TK"}
+            {busy ? "Transferring..." : "Transfer TK"}
           </button>
         </>
       }
@@ -16810,7 +16998,7 @@ function TransferTkModal({
             Container មួយទៀតដែលមាន Destination ដូចគ្នា។
           </p>
           <div>
-            <label className={LABEL_CLS}>Container គោលដៅ *</label>
+            <label className={LABEL_CLS}>Destination Container *</label>
             <select
               value={targetId}
               onChange={(e) => setTargetId(e.target.value)}
@@ -16871,7 +17059,7 @@ function TransferTkModal({
           photos={photos}
           setPhotos={setPhotos}
           categories={CONTAINER_PHOTO_CATEGORIES}
-          emptyHint="មិនទាន់មានរូបភាព"
+          emptyHint="No images yet"
         />
       </div>
       <ContainerErrorLine text={err} />
@@ -17049,7 +17237,7 @@ function exportManifest(kind, container, tks, whRows) {
   } else {
     const w = window.open("", "_blank");
     if (!w)
-      throw new Error("Browser បានបិទ Pop-up — សូមអនុញ្ញាតរួចព្យាយាមម្ដងទៀត");
+      throw new Error("Browser បានClose Pop-up — សូមអនុញ្ញាតរួចព្យាយាមម្ដងទៀត");
     w.document.write(manifestHtml(m, base));
     w.document.close();
     w.focus();
@@ -17535,7 +17723,7 @@ function ContainersPageInner() {
           <input
             value={f.q}
             onChange={setFilter("q")}
-            placeholder="ស្វែងរក Container No, Seal, Shipment ID, TK, Order ID, Customer ID..."
+            placeholder="Search Container No, Seal, Shipment ID, TK, Order ID, Customer ID..."
             className={`${INPUT_CLS} pl-9`}
           />
         </div>
@@ -17672,7 +17860,7 @@ function ContainersPageInner() {
           ))}
         {listReady && tableRows.length === 0 && (
           <div className={`${CT_CARD} p-8 text-center text-sm text-ink-600/40`}>
-            មិនមានទិន្នន័យទេ
+            No data available.
           </div>
         )}
       </div>
@@ -17732,16 +17920,13 @@ function ContainerDetailInner() {
       className="inline-flex items-center gap-1.5 text-sm text-ink-600/60 hover:text-ink-900"
     >
       <ArrowLeft size={15} />
-      ត្រឡប់ទៅ Containers
+      Back to Containers
     </Link>
   );
 
   if (!container && !store.ready)
     return (
-      <DetailPageSkeleton
-        backTo="/containers"
-        backLabel="ត្រឡប់ទៅ Containers"
-      />
+      <DetailPageSkeleton backTo="/containers" backLabel="Back to Containers" />
     );
 
   if (!container) {
@@ -17749,7 +17934,7 @@ function ContainerDetailInner() {
       <div className="space-y-5">
         {back}
         <div className={`${CT_CARD} p-10 text-center text-sm text-ink-600/60`}>
-          {store.loading ? "កំពុងផ្ទុក..." : `រកមិនឃើញ Container "${id}" ទេ`}
+          {store.loading ? "Loading..." : `រកមិនឃើញ Container "${id}" ទេ`}
         </div>
       </div>
     );
@@ -17788,13 +17973,13 @@ function ContainerDetailInner() {
   const askRemove = (tk) =>
     ask({
       title: "Remove TK",
-      message: `ដក TK ${tk} ចេញពី Container ${container.container_number}? TK នឹងអាចដាក់ក្នុង Container ផ្សេងវិញបាន។`,
+      message: `Remove TK ${tk} ចេញពី Container ${container.container_number}? TK នឹងអាចដាក់ក្នុង Container ផ្សេងវិញបាន។`,
       confirmLabel: "Remove TK",
       danger: true,
       askReason: true,
       onConfirm: async (reason) => {
         await store.removeTk(container, tk, reason);
-        showFlash(`បានដក TK ${tk} ចេញ`);
+        showFlash(`បានRemove TK ${tk} ចេញ`);
       },
     });
 
@@ -17972,7 +18157,7 @@ function ContainerDetailInner() {
               onClick={() =>
                 ask({
                   title: "Delete Container",
-                  message: `លុប Container ${container.container_number} ជាអចិន្ត្រៃយ៍? TK ទាំងអស់ក្នុងនោះនឹងត្រូវដោះចេញ ហើយ History នឹងត្រូវលុប។ សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។`,
+                  message: `លុប Container ${container.container_number} ជាអចិន្ត្រៃយ៍? TK Allក្នុងនោះនឹងត្រូវដោះចេញ ហើយ History នឹងត្រូវលុប។ This action cannot be undone.`,
                   confirmLabel: "Delete",
                   danger: true,
                   onConfirm: async () => {
@@ -17994,11 +18179,11 @@ function ContainerDetailInner() {
                 ask({
                   title: "Cancel Container",
                   message:
-                    "តើអ្នកប្រាកដថាចង់បោះបង់ Container នេះ? TK ទាំងអស់នឹងត្រូវដោះលែងចេញ។",
+                    "តើអ្នកប្រាកដថាចង់Cancel Container នេះ? TK Allនឹងត្រូវដោះលែងចេញ។",
                   confirmLabel: "Cancel Container",
                   danger: true,
                   askReason: true,
-                  onConfirm: run("Cancelled", "Container ត្រូវបានបោះបង់"),
+                  onConfirm: run("Cancelled", "Container ត្រូវបានCancel"),
                 })
               }
             >
@@ -18051,7 +18236,7 @@ function ContainerDetailInner() {
                   onClick={() =>
                     ask({
                       title: "Confirm Arrival",
-                      message: `បញ្ជាក់ថា Container ${container.container_number} បានមកដល់ឃ្លាំងទទួលទំនិញ? វាមិនប៉ះពាល់ TK ទេ — TK នៅ Outbound រហូតដល់ឃ្លាំង Scan Arrive V2។`,
+                      message: `Confirmថា Container ${container.container_number} បានមកដល់ឃ្លាំងទទួលទំនិញ? វាមិនប៉ះពាល់ TK ទេ — TK នៅ Outbound រហូតដល់ឃ្លាំង Scan Arrive V2។`,
                       confirmLabel: "Confirm Arrival",
                       onConfirm: async () => {
                         await store.confirmArrival(container);
@@ -18265,7 +18450,7 @@ function ContainerDetailInner() {
                   ))}
                 {pkgReady && tkRows.length === 0 && (
                   <div className="p-8 text-center text-sm text-ink-600/40">
-                    មិនទាន់មាន TK ក្នុង Container នេះទេ
+                    No TKs in this container yet.
                   </div>
                 )}
               </div>
@@ -18296,9 +18481,7 @@ function ContainerDetailInner() {
                   </li>
                 ))}
                 {myHistory.length === 0 && (
-                  <li className="text-sm text-ink-600/40">
-                    មិនទាន់មាន History ទេ
-                  </li>
+                  <li className="text-sm text-ink-600/40">No history yet.</li>
                 )}
               </ol>
             </div>
@@ -18308,7 +18491,7 @@ function ContainerDetailInner() {
         {/* A. Information */}
         <div className={`${CT_CARD} p-5`}>
           <h2 className="font-display font-bold text-sm text-ink-900 mb-4">
-            ព័ត៌មាន Container
+            Container information
           </h2>
           <InfoGrid
             items={[
@@ -18424,8 +18607,8 @@ function ContainerDetailInner() {
         onDone={(res) =>
           showFlash(
             res.warning
-              ? `បានរាយការណ៍ Exception — ${res.warning}`
-              : "បានរាយការណ៍ Exception",
+              ? `Exception reported — ${res.warning}`
+              : "Exception reported",
           )
         }
       />
@@ -18467,7 +18650,7 @@ function ContainerDetailInner() {
         by={store.by}
         onSeal={async (seal) => {
           await store.sealContainer(container, seal);
-          showFlash("Container ត្រូវបាន Seal");
+          showFlash("Container sealed");
         }}
         onClose={() => setSealOpen(false)}
       />
@@ -18525,7 +18708,7 @@ const CustomerApp = (() => {
     ShieldCheck,
   } = Icons;
   // =============================================================
-  // DRSB Customer Portal — SEPARATE from Admin/Staff (Cargo Bridge)
+  // Customer Portal — SEPARATE from Admin/Staff (Cargo Bridge)
   // Mobile-first. Needs: react-router-dom, lucide-react, Tailwind.
   // Mount on its own entry/domain (see customer-main.jsx note below).
   //
@@ -18624,7 +18807,7 @@ const CustomerApp = (() => {
         .eq("auth_user_id", uid)
         .maybeSingle();
       if (error || !data) {
-        say("មានបញ្ហាទាញយកគណនី");
+        say("Unable to load account");
         return null;
       }
       setMe(data);
@@ -18721,12 +18904,12 @@ const CustomerApp = (() => {
 
     const login = async (phone, pw) => {
       if (!supabase) return "Supabase មិនទាន់តភ្ជាប់";
-      if (!phone || !pw) return "សូមបំពេញលេខទូរស័ព្ទ និងលេខសម្ងាត់";
+      if (!phone || !pw) return "Please enter your phone number and password.";
       const { error } = await supabase.auth.signInWithPassword({
         email: fakeEmailForPhone(phone),
         password: pw,
       });
-      return error ? "លេខទូរស័ព្ទ ឬលេខសម្ងាត់មិនត្រឹមត្រូវ" : null;
+      return error ? "Incorrect phone number or password." : null;
     };
     const signup = async (name, phone, email, pw) => {
       if (!supabase) return "Supabase មិនទាន់តភ្ជាប់";
@@ -18736,8 +18919,8 @@ const CustomerApp = (() => {
       });
       if (error)
         return /already|registered|exists/i.test(error.message)
-          ? "លេខទូរស័ព្ទនេះបានប្រើរួចហើយ"
-          : "បង្កើតគណនីមិនបាន";
+          ? "Phone numberនេះបានប្រើរួចហើយ"
+          : "Unable to create account";
       if (!data.session) return "signup-needs-confirm"; // "Confirm email" is ON in Supabase — turn it off, see code comment above
       const { error: insErr } = await supabase.from("customers").insert({
         auth_user_id: data.user.id,
@@ -18746,7 +18929,7 @@ const CustomerApp = (() => {
         email: email || null,
         status: "active",
       });
-      if (insErr) return "រក្សាទុកគណនីមិនបាន: " + insErr.message;
+      if (insErr) return "Unable to save account: " + insErr.message;
       await loadMe(data.user.id);
       await Promise.all([loadShips(), loadAddrs()]);
       return null;
@@ -18928,11 +19111,11 @@ const CustomerApp = (() => {
         return;
       }
       if (mode === "signup" && !(f.name && f.phone && f.pw.length >= 4)) {
-        setErr("សូមបំពេញឈ្មោះ លេខទូរស័ព្ទ និងលេខសម្ងាត់ (≥4)");
+        setErr("សូមបំពេញឈ្មោះ Phone number និងលេខសម្ងាត់ (≥4)");
         return;
       }
       if (mode === "login" && !(f.id && f.pw)) {
-        setErr("សូមបំពេញលេខទូរស័ព្ទ និងលេខសម្ងាត់");
+        setErr("Please enter your phone number and password.");
         return;
       }
       setBusy(true);
@@ -18951,7 +19134,9 @@ const CustomerApp = (() => {
             <div className="mx-auto w-16 h-16 rounded-2xl bg-white/15 grid place-items-center mb-3">
               <Ship size={32} />
             </div>
-            <div className="text-3xl font-extrabold tracking-tight">DRSB</div>
+            <div className="text-3xl font-extrabold tracking-tight">
+              Cargo Bridge
+            </div>
             <p className="text-blue-100 text-xs">Global to Your Door</p>
             <p className="mt-5 font-semibold">Customer Portal</p>
             <p className="text-blue-100 text-sm">
@@ -18977,14 +19162,14 @@ const CustomerApp = (() => {
             {mode === "signup" ? (
               <Field
                 icon={Phone}
-                ph="Phone number / លេខទូរស័ព្ទ"
+                ph="Phone number / Phone number"
                 v={f.phone}
                 set={s("phone")}
               />
             ) : (
               <Field
                 icon={Phone}
-                ph="Phone number / លេខទូរស័ព្ទ"
+                ph="Phone number / Phone number"
                 v={f.id}
                 set={s("id")}
               />
@@ -19060,7 +19245,7 @@ const CustomerApp = (() => {
           className="min-h-screen grid place-items-center text-slate-400 text-sm"
           style={FONT}
         >
-          កំពុងផ្ទុក...
+          Loading...
         </div>
       );
     if (!me) return <Navigate to={P("/login")} replace />;
@@ -19174,8 +19359,8 @@ const CustomerApp = (() => {
         <header className="bg-blue-600 text-white px-5 pt-6 pb-16 rounded-b-3xl">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-xl font-bold">សួស្ដី {me.name} 👋</h1>
-              <p className="text-blue-100 text-sm">Welcome to DRSB</p>
+              <h1 className="text-xl font-bold">Hello {me.name} 👋</h1>
+              <p className="text-blue-100 text-sm">Welcome to Cargo Bridge</p>
             </div>
             <span className="w-10 h-10 grid place-items-center rounded-full bg-white/15">
               <Bell size={20} />
@@ -19186,7 +19371,7 @@ const CustomerApp = (() => {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="ស្វែងរកលេខ Tracking"
+              placeholder="Search tracking number"
               className="flex-1 outline-none text-[15px]"
             />
           </div>
@@ -19198,7 +19383,7 @@ const CustomerApp = (() => {
                 hit.map((s) => <Row key={s.tk} s={s} />)
               ) : (
                 <p className="text-center text-sm text-slate-400 py-6">
-                  រកមិនឃើញ Tracking នេះក្នុងគណនីរបស់អ្នក
+                  No matching tracking number found in your account.
                 </p>
               )}
             </div>
@@ -19250,7 +19435,7 @@ const CustomerApp = (() => {
                 </div>
                 {!ships.length && (
                   <p className="text-center text-sm text-slate-400 py-6">
-                    មិនទាន់មានទំនិញ
+                    No shipments yet
                   </p>
                 )}
               </section>
@@ -19293,7 +19478,7 @@ const CustomerApp = (() => {
           ))}
           {!list.length && (
             <p className="text-center text-sm text-slate-400 py-10">
-              មិនទាន់មានទំនិញក្នុងស្ថានភាពនេះ
+              No shipments yetក្នុងស្ថានភាពនេះ
             </p>
           )}
         </div>
@@ -19325,7 +19510,7 @@ const CustomerApp = (() => {
       return (
         <>
           <Top title="Shipment Detail" back />
-          <p className="text-center text-slate-400 py-16">រកមិនឃើញ Shipment</p>
+          <p className="text-center text-slate-400 py-16">No shipment found</p>
         </>
       );
     return (
@@ -19404,7 +19589,7 @@ const CustomerApp = (() => {
       return (
         <>
           <Top title="My China Warehouse" back />
-          <p className="text-center text-slate-400 py-16">កំពុងផ្ទុក...</p>
+          <p className="text-center text-slate-400 py-16">Loading...</p>
         </>
       );
     if (!wh)
@@ -19802,7 +19987,7 @@ const CustomerApp = (() => {
                   await saveAddr(ed);
                   setBusy(false);
                   setEd(null);
-                  say("បានរក្សាទុក");
+                  say("បានSave");
                 }}
               >
                 Save Address
@@ -19829,7 +20014,7 @@ const CustomerApp = (() => {
               <input
                 value={bq}
                 onChange={(e) => setBq(e.target.value)}
-                placeholder="ស្វែងរកសាខា ឬ ខេត្ត..."
+                placeholder="Searchសាខា ឬ ខេត្ត..."
                 className="h-11 px-3 rounded-xl border border-slate-200 bg-white text-sm outline-none"
               />
               <div className="flex-1 overflow-y-auto space-y-2">
@@ -19853,10 +20038,10 @@ const CustomerApp = (() => {
                     return (
                       <p className="text-center text-sm text-slate-400 py-10 px-4">
                         {branchErr
-                          ? "មិនអាចទាញបញ្ជីសាខាបាន — សូមឱ្យ Admin ត្រួតពិនិត្យ permission លើតារាង warehouses (" +
+                          ? "Unable to load branch list — សូមឱ្យ Admin ត្រួតពិនិត្យ permission លើតារាង warehouses (" +
                             branchErr +
                             ")"
-                          : "មិនទាន់មានសាខាទទួលទំនិញ Active ទេ"}
+                          : "No active receiving branches available."}
                       </p>
                     );
                   return list.map((b) => (
@@ -20150,7 +20335,7 @@ function CreateRoleModal({ open, roles, onClose, onCreate }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
           >
-            បោះបង់
+            Cancel
           </button>
           <button
             disabled={busy}
@@ -20306,7 +20491,7 @@ function RoleManagementPage() {
       );
       commitRoles(next); // takes effect for every user of the role right away
       return persistRoles(next.filter((r) => dirtyNames.includes(r.name)));
-    }, `រក្សាទុកសិទ្ធិរបស់ ${dirtyNames.length} Role រួចរាល់`);
+    }, `Saveសិទ្ធិរបស់ ${dirtyNames.length} Role រួចរាល់`);
     if (ok) setDraft({});
     setSaving(false);
   }
@@ -20338,7 +20523,7 @@ function RoleManagementPage() {
       next === "Inactive" &&
       n > 0 &&
       !window.confirm(
-        `${n} user កំពុងប្រើ Role "${r.name}" — បិទវាធ្វើឱ្យ user ទាំងនោះបាត់សិទ្ធិទាំងអស់។ បន្ត?`,
+        `${n} user កំពុងប្រើ Role "${r.name}" — Closeវាធ្វើឱ្យ user ទាំងនោះបាត់សិទ្ធិAll។ បន្ត?`,
       )
     )
       return;
@@ -20699,7 +20884,7 @@ function RoleManagementPage() {
           <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 border-b border-mist-200">
             <TriangleAlert size={13} />
             មាន Unsaved changes ({dirtyNames.join(", ")}) — ចុច Save Changes
-            ដើម្បីអនុវត្តលើ user ទាំងអស់នៃ Role នោះ។
+            ដើម្បីអនុវត្តលើ user Allនៃ Role នោះ។
           </div>
         )}
 
@@ -20885,7 +21070,7 @@ function Placeholder({ title }) {
       <h2 className="font-display font-bold text-ink-900">{title}</h2>
       <p className="text-sm text-ink-600/55 mt-1 max-w-xs">
         Module នេះកំពុងត្រូវបានអភិវឌ្ឍ។ Layout និង Dashboard
-        ត្រូវបានបញ្ចប់ជាមុនសិន។
+        ត្រូវបានបញ្ចប់ជាPreviousសិន។
       </p>
     </div>
   );
@@ -20961,12 +21146,37 @@ function AdminApp() {
   );
 }
 
+const CB_DESIGN_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{--cb-primary:#2563eb;--cb-primary-dark:#1d4ed8;--cb-navy:#0f1f3d;--cb-bg:#f4f7fb;--cb-border:#e5eaf2;--cb-text:#10213f;--cb-muted:#6b7b96;}
+html,body,#root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+body{background:var(--cb-bg);color:var(--cb-text);}
+.cb-app{min-height:100vh;background:var(--cb-bg);}
+.cb-app *{font-family:inherit;}
+.cb-surface{background:#fff;border:1px solid var(--cb-border);border-radius:16px;box-shadow:0 8px 30px rgba(15,31,61,.055);}
+.cb-sidebar{background:linear-gradient(180deg,#0b1b38 0%,#0f2346 100%);}
+.cb-sidebar .cb-active{background:linear-gradient(135deg,#2f75f4,#2563eb);box-shadow:0 8px 20px rgba(37,99,235,.22);}
+.cb-topbar{background:rgba(255,255,255,.92);backdrop-filter:blur(14px);border-bottom:1px solid rgba(229,234,242,.9);}
+.cb-input{border:1px solid var(--cb-border);background:#fbfcfe;border-radius:12px;transition:.2s ease;}
+.cb-input:focus{border-color:#60a5fa;box-shadow:0 0 0 4px rgba(37,99,235,.09);background:#fff;outline:none;}
+.cb-card{border-radius:16px!important;box-shadow:0 8px 28px rgba(15,31,61,.055)!important;}
+.cb-stat{transition:transform .18s ease,box-shadow .18s ease;}
+.cb-stat:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(15,31,61,.08)!important;}
+.cb-route{background:linear-gradient(135deg,#0d2144 0%,#163764 55%,#1d4f91 100%);border-radius:18px!important;box-shadow:0 14px 36px rgba(15,31,61,.14);}
+.cb-page-title{letter-spacing:-.025em;}
+.cb-table-row:hover{background:#f8fbff;}
+@media(max-width:1023px){.cb-sidebar{box-shadow:20px 0 60px rgba(15,31,61,.22);}}
+`;
+
 function App() {
   return (
-    <Routes>
-      <Route path="/customer/*" element={<CustomerApp />} />
-      <Route path="/*" element={<AdminApp />} />
-    </Routes>
+    <>
+      <style>{CB_DESIGN_CSS}</style>
+      <Routes>
+        <Route path="/customer/*" element={<CustomerApp />} />
+        <Route path="/*" element={<AdminApp />} />
+      </Routes>
+    </>
   );
 }
 
