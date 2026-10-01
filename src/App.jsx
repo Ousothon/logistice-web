@@ -483,6 +483,7 @@ const NAV_SECTIONS = [
       { label: "Packages / TK", icon: "Package", path: "/packages" },
       { label: "Scan Center", icon: "ScanLine", path: "/scan-center" },
       { label: "Process Tracking", icon: "Route", path: "/process-tracking" },
+      { label: "Exception Center", icon: "TriangleAlert", path: "/exceptions" },
       { label: "Inbound Origin", icon: "LogIn", path: "/inbound-origin" },
       { label: "Outbound Origin", icon: "LogOut", path: "/outbound-origin" },
       { label: "Shipments", icon: "Truck", path: "/shipments" },
@@ -679,6 +680,8 @@ const PERMISSION_GROUPS = [
       ["wh_arrived.view", "View W.H Arrived"],
       ["kh_warehouse.view", "View Cambodia Warehouse"],
       ["sorting.view", "View Sorting"],
+      ["sorting.scan", "Scan TK for Sorting"],
+      ["sorting.process", "Confirm Sorting"],
       ...crudPerms("delivery", "Delivery"),
     ],
   },
@@ -889,6 +892,8 @@ function seedRoles() {
         "wh_arrived.view",
         "kh_warehouse.view",
         "sorting.view",
+        "sorting.scan",
+        "sorting.process",
         "delivery.view",
         "customer.view",
         "exception.view",
@@ -910,6 +915,8 @@ function seedRoles() {
         "arrival.view",
         "wh_arrived.view",
         "sorting.view",
+        "sorting.scan",
+        "sorting.process",
         "delivery.view",
       ],
       { description: "Front-line warehouse operator." },
@@ -950,6 +957,8 @@ function seedRoles() {
         "wh_arrived.view",
         "kh_warehouse.view",
         "sorting.view",
+        "sorting.scan",
+        "sorting.process",
         "delivery.view",
         "delivery.create",
       ],
@@ -1091,9 +1100,17 @@ function requirePermission(user, key, message) {
 // every signed-in user of that role.
 function computeAllowedPaths(u) {
   if (!u || u.role === SUPER_ADMIN) return "*";
-  return Object.entries(PATH_VIEW)
+  const paths = Object.entries(PATH_VIEW)
     .filter(([, key]) => hasPermission(u, key))
     .map(([path]) => path);
+
+  // Exception Center is an operational read/view module. Keep it available
+  // to users who can already view Packages / TK, even when an older role
+  // record in Supabase/localStorage was created before exception.view existed.
+  if (hasPermission(u, "tk.view") && !paths.includes("/exceptions")) {
+    paths.push("/exceptions");
+  }
+  return paths;
 }
 
 function withLivePaths(u) {
@@ -1696,6 +1713,22 @@ function advanceTimeline(timeline, proceedBy) {
 
 function formatNowTimestamp() {
   const d = new Date();
+  const day = d.getDate();
+  const month = d.toLocaleString("en-US", { month: "short" });
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  return `${day} ${month}, ${hours}:${minutes} ${ampm}`;
+}
+
+// Same display format as formatNowTimestamp(), but for a DB ISO timestamp
+// (status_history.created_at / packages.updated_at) so every role sees the
+// same "1 Oct, 4:19 PM" instead of a raw "2026-10-01T09:17:36.801+00:00".
+function formatDbTimestamp(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
   const day = d.getDate();
   const month = d.toLocaleString("en-US", { month: "short" });
   let hours = d.getHours();
@@ -2862,7 +2895,10 @@ async function uploadPhotosRemote(meta, photos) {
     const { error: upErr } = await supabase.storage
       .from("cargo-photos")
       .upload(path, blob, { contentType: "image/jpeg" });
-    if (upErr) throw upErr;
+    // A previous attempt may have uploaded the file but failed on the table
+    // insert — don't let "already exists" block the cargo_photos row.
+    if (upErr && !/already exists|duplicate/i.test(upErr.message || ""))
+      throw upErr;
     const { error } = await supabase.from("cargo_photos").insert({
       package_id: meta.package_id || null,
       tk: meta.tk,
@@ -2876,20 +2912,40 @@ async function uploadPhotosRemote(meta, photos) {
 }
 
 async function loadPhotosRemote(tk) {
+  if (!supabase) return [];
   const { data, error } = await supabase
     .from("cargo_photos")
     .select("*")
     .eq("tk", tk)
     .order("created_at");
-  if (error || !data) return [];
-  return data.map((r) => ({
-    id: r.id,
-    category: r.category,
-    name: r.storage_path,
-    dataUrl: supabase.storage.from("cargo-photos").getPublicUrl(r.storage_path)
-      .data.publicUrl,
-    addedAt: r.created_at,
-  }));
+  if (error) throw error;
+  if (!data?.length) return [];
+
+  // The bucket may be public OR private depending on the project's Storage
+  // policy. Prefer a signed URL so Staff/Admin can see the same image even
+  // when the bucket is private; fall back to the public URL for public buckets.
+  return Promise.all(
+    data.map(async (r) => {
+      let dataUrl = supabase.storage
+        .from("cargo-photos")
+        .getPublicUrl(r.storage_path).data.publicUrl;
+      try {
+        const { data: signed } = await supabase.storage
+          .from("cargo-photos")
+          .createSignedUrl(r.storage_path, 3600);
+        if (signed?.signedUrl) dataUrl = signed.signedUrl;
+      } catch {
+        // Public bucket: keep the public URL above.
+      }
+      return {
+        id: r.id,
+        category: r.category,
+        name: r.storage_path,
+        dataUrl,
+        addedAt: r.created_at,
+      };
+    }),
+  );
 }
 
 // Always keeps a local copy; also uploads when Supabase is configured.
@@ -2913,12 +2969,66 @@ async function savePhotos(meta, photos) {
   return warning;
 }
 
-async function loadPhotos(tk) {
-  if (supabase) {
-    const remote = await loadPhotosRemote(tk).catch(() => []);
-    if (remote.length) return remote;
+// Photos that only exist in THIS browser's IndexedDB (because the original
+// upload to Supabase failed) are invisible to every other role/device.
+// When we find such photos, push them to Supabase so Staff can see them too.
+const photoBackfillInFlight = new Set();
+async function backfillPhotosRemote(tk, photos) {
+  const key = String(tk);
+  if (!supabase || !photos.length || photoBackfillInFlight.has(key)) return "";
+  photoBackfillInFlight.add(key);
+  try {
+    const { data: pkg } = await supabase
+      .from("packages")
+      .select("id, customer_id, order_no")
+      .eq("tk", tk)
+      .maybeSingle();
+    await uploadPhotosRemote(
+      {
+        tk,
+        package_id: pkg?.id || null,
+        customer_id: pkg?.customer_id ?? null,
+        order_no: pkg?.order_no ?? null,
+      },
+      photos,
+    );
+    return "";
+  } catch (err) {
+    console.error("[Photos] backfill to Supabase failed", err);
+    return err?.message || "Upload failed";
+  } finally {
+    photoBackfillInFlight.delete(key);
   }
-  return loadPhotosLocal(tk).catch(() => []);
+}
+
+// Returns { photos, error, localOnly, syncError } so the gallery can tell the
+// user WHY there are no images instead of silently showing "No images yet".
+async function loadPhotosDetailed(tk) {
+  let error = "";
+  if (supabase) {
+    try {
+      const remote = await loadPhotosRemote(tk);
+      if (remote.length) return { photos: remote, error: "", localOnly: false };
+    } catch (err) {
+      console.error("[Photos] read from Supabase failed", err);
+      error = err?.message || "Cannot read cargo_photos";
+    }
+  }
+  const local = await loadPhotosLocal(tk).catch(() => []);
+  let syncError = "";
+  if (supabase && local.length) {
+    syncError = await backfillPhotosRemote(tk, local);
+  }
+  return {
+    photos: local,
+    error: local.length ? "" : error,
+    localOnly: !!supabase && local.length > 0,
+    syncError,
+  };
+}
+
+async function loadPhotos(tk) {
+  return (await loadPhotosDetailed(tk)).photos;
 }
 
 const PACKAGE_DETAILS = {}; // live data only — nothing hard-coded
@@ -3057,6 +3167,25 @@ function PackageTrackingProvider({ children }) {
     "cargo_bridge_status_history",
     {},
   );
+  // status_history rows as stored in Supabase (the shared, cross-device copy),
+  // keyed by lower-cased TK. localStorage above is only a per-browser cache,
+  // which is why Staff saw "Pending" with no time for stages Admin completed.
+  const [dbHistory, setDbHistory] = useState({});
+
+  const loadDbHistory = React.useCallback(async (tk) => {
+    if (!supabase || !tk) return;
+    const { data, error } = await supabase
+      .from("status_history")
+      .select("*")
+      .eq("tk", tk)
+      .order("created_at", { ascending: true });
+    if (error) {
+      console.error("[status_history] read failed", error);
+      return;
+    }
+    const k = String(tk).trim().toLowerCase();
+    setDbHistory((prev) => ({ ...prev, [k]: data || [] }));
+  }, []);
 
   const refetch = React.useCallback(async () => {
     if (!supabase) return;
@@ -3069,6 +3198,25 @@ function PackageTrackingProvider({ children }) {
     setLoading(false);
     setReady(true);
     if (!error && data) setPackages(data);
+    // Pull the shared status log too, so lists/timelines on every device
+    // show the same stage times and "Proceed By".
+    const { data: hist, error: histErr } = await supabase
+      .from("status_history")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(3000);
+    if (histErr) {
+      console.error("[status_history] read failed", histErr);
+    } else if (hist) {
+      const grouped = {};
+      for (const row of [...hist].reverse()) {
+        const k = String(row.tk || "")
+          .trim()
+          .toLowerCase();
+        (grouped[k] = grouped[k] || []).push(row);
+      }
+      setDbHistory((prev) => ({ ...prev, ...grouped }));
+    }
     // On error (e.g. RLS not configured yet), keep whatever's cached rather
     // than blanking the screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3078,8 +3226,115 @@ function PackageTrackingProvider({ children }) {
     refetch();
   }, [refetch]);
 
+  // Keep every open role/session in sync when another user changes a package.
+  // Package Detail must not require a manual refresh to see a Super Admin
+  // status update. Realtime is best-effort; the focus/visibility refetch is a
+  // second safety net for environments where Realtime is not enabled.
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    const channel = supabase
+      .channel("cargo-bridge-packages-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "packages" },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            const deletedId = payload.old?.id;
+            setPackages((prev) =>
+              prev.filter((row) => String(row.id) !== String(deletedId)),
+            );
+            return;
+          }
+
+          const nextRow = payload.new;
+          if (!nextRow?.id) return;
+          setPackages((prev) => {
+            const idx = prev.findIndex(
+              (row) => String(row.id) === String(nextRow.id),
+            );
+            if (idx === -1) return [nextRow, ...prev];
+            const next = [...prev];
+            next[idx] = nextRow;
+            return next;
+          });
+        },
+      )
+      .subscribe();
+
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "visible") refetch();
+    };
+
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnFocus);
+
+    return () => {
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+      supabase.removeChannel(channel);
+    };
+  }, [refetch]);
+
+  // The database `packages.status` is the source of truth for the current
+  // operational stage.  The old implementation always preferred the local
+  // `cargo_bridge_timelines` cache, which could stay at Inbound Origin even
+  // after another role updated `packages.status` in Supabase.
+  // Build the visible timeline from the shared package row whenever its
+  // status is available, while retaining locally recorded timestamps where
+  // possible. This keeps Package Detail consistent across Admin/Staff.
   function getTimeline(tk) {
-    return timelines[tk] || packageFallbackDetail(tk).timeline;
+    const key = String(tk || "")
+      .trim()
+      .toLowerCase();
+    const localTimeline = timelines[tk] || packageFallbackDetail(tk).timeline;
+    const dbPackage = packages.find(
+      (p) =>
+        String(p?.tk || "")
+          .trim()
+          .toLowerCase() === key,
+    );
+    const dbStatus = String(dbPackage?.status || "").trim();
+    const statusIndex = PACKAGE_STAGES.indexOf(dbStatus);
+
+    if (statusIndex === -1) return localTimeline;
+
+    const now = formatDbTimestamp(
+      dbPackage?.updated_at || dbPackage?.created_at || null,
+    );
+    // Shared status log from Supabase — the same for Admin and Staff.
+    const sharedLog = dbHistory[key] || [];
+    const stageEntry = (label) => {
+      for (let j = sharedLog.length - 1; j >= 0; j--) {
+        if (String(sharedLog[j].status || "").trim() === label)
+          return sharedLog[j];
+      }
+      return null;
+    };
+    return PACKAGE_STAGES.map((label, i) => {
+      const previous = localTimeline?.[i];
+      const logged = stageEntry(label);
+      const loggedTime = logged ? formatDbTimestamp(logged.created_at) : null;
+      const loggedBy = logged?.created_by || null;
+      if (i < statusIndex) {
+        return {
+          label,
+          state: "done",
+          time: loggedTime || previous?.time || null,
+          proceedBy: loggedBy || previous?.proceedBy || null,
+        };
+      }
+      if (i === statusIndex) {
+        return {
+          label,
+          state: statusIndex === PACKAGE_STAGES.length - 1 ? "done" : "active",
+          time: loggedTime || previous?.time || now,
+          proceedBy:
+            loggedBy || previous?.proceedBy || dbPackage?.updated_by || null,
+        };
+      }
+      return { label, state: "pending", time: null, proceedBy: null };
+    });
   }
 
   const historyKey = (tk) =>
@@ -3088,6 +3343,15 @@ function PackageTrackingProvider({ children }) {
       .toLowerCase();
 
   function getHistory(tk) {
+    const shared = dbHistory[historyKey(tk)];
+    if (shared && shared.length) {
+      return shared.map((r) => ({
+        status: r.status,
+        at: r.created_at,
+        user: r.created_by || "System",
+        remark: r.remark || "",
+      }));
+    }
     return statusHistory[historyKey(tk)] || [];
   }
 
@@ -3108,8 +3372,14 @@ function PackageTrackingProvider({ children }) {
         .from("status_history")
         .insert({ tk, status, remark: entry.remark, created_by: entry.user })
         .then(
-          () => {},
-          () => {},
+          ({ error }) => {
+            if (error) {
+              console.error("[status_history] insert failed", error);
+              return;
+            }
+            loadDbHistory(tk);
+          },
+          (err) => console.error("[status_history] insert failed", err),
         );
     }
   }
@@ -3354,6 +3624,7 @@ function PackageTrackingProvider({ children }) {
         syncTimelineToStatus,
         getHistory,
         logStatus,
+        loadDbHistory,
         updateInboundStatus,
         advance,
         packages: scopedPackages,
@@ -4449,14 +4720,24 @@ function CustomerDetailsCard({ customerId }) {
 
 function PhotoGallery({ tk }) {
   const [photos, setPhotos] = useState(null);
+  const [photoNote, setPhotoNote] = useState({ error: "", syncError: "" });
   const [activeIdx, setActiveIdx] = useState(null);
 
   useEffect(() => {
     let alive = true;
     setPhotos(null);
-    loadPhotos(tk)
-      .then((p) => alive && setPhotos(p))
-      .catch(() => alive && setPhotos([]));
+    setPhotoNote({ error: "", syncError: "" });
+    loadPhotosDetailed(tk)
+      .then((r) => {
+        if (!alive) return;
+        setPhotos(r.photos);
+        setPhotoNote({ error: r.error, syncError: r.syncError });
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setPhotos([]);
+        setPhotoNote({ error: err?.message || "Load failed", syncError: "" });
+      });
     return () => {
       alive = false;
     };
@@ -4477,12 +4758,24 @@ function PhotoGallery({ tk }) {
           </span>
         )}
       </div>
+      {photoNote.syncError && (
+        <p className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+          រូបភាពនេះមានតែក្នុង browser នេះ — Upload ទៅ Supabase មិនបានទេ (Staff
+          នឹងមិនឃើញ): {photoNote.syncError}។ សូមពិនិត្យ Storage bucket
+          "cargo-photos" និង policy លើ cargo_photos។
+        </p>
+      )}
       {photos === null ? (
         <SkeletonPhotoGrid count={3} />
       ) : photos.length === 0 ? (
         <div className="py-8 flex flex-col items-center text-center">
           <Icons.ImageOff size={30} className="text-ink-600/20 mb-2" />
           <p className="text-sm text-ink-600/45">TK នេះNo images yetទេ</p>
+          {photoNote.error && (
+            <p className="mt-2 text-xs text-red-600 max-w-xs">
+              មិនអាចអានរូបភាពពី Supabase បានទេ: {photoNote.error}
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3">
@@ -6491,6 +6784,10 @@ function TkScanField({
   onChange,
   placeholder,
   scan,
+  actionLabel = "",
+  onAction,
+  actionDisabled = false,
+  actionLoading = false,
 }) {
   const { phase, message, shakeKey, inputRef } = scan;
   const tone =
@@ -6556,6 +6853,19 @@ function TkScanField({
           placeholder={placeholder}
           className="flex-1 min-w-0 outline-none text-[15px] font-medium tracking-wide text-ink-900 bg-transparent placeholder:font-normal placeholder:tracking-normal"
         />
+        {actionLabel && (
+          <button
+            type="button"
+            onClick={onAction}
+            disabled={actionDisabled || actionLoading}
+            className="relative z-10 inline-flex h-8 min-w-[72px] items-center justify-center gap-1.5 rounded-md bg-signal-blue px-3 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:bg-signal-blue/90 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {actionLoading ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : null}
+            {actionLoading ? "Checking..." : actionLabel}
+          </button>
+        )}
         <span className="cb-scan__line" aria-hidden="true" />
       </div>
       {/* Fixed-height message slot so the cards below never jump while scanning. */}
@@ -7738,16 +8048,703 @@ function WHArrivedPage() {
 // received at this branch, same scan -> Verify -> Confirm flow as
 // W.H Arrived, moving it to "Inbound Warehouse" instead.
 function SortingPage() {
+  const { user } = useAuth();
+  const { packages, findPackage, upsertPackage, refetch } =
+    usePackageTracking();
+  const { rows: warehouses, ready: warehousesReady } = useWarehouses();
+  const [tkInput, setTkInput] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [branch, setBranch] = useState("");
+  const [note, setNote] = useState("");
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [filter, setFilter] = useState("pending");
+  const [search, setSearch] = useState("");
+  const scan = useScanFeedback();
+  const scanDebounceRef = useRef(null);
+
+  const canScan = hasPermission(user, "sorting.scan");
+  const canProcess = hasPermission(user, "sorting.process");
+  const canChangeBranch = hasPermission(user, "order.change_branch");
+  const branches = (warehouses || [])
+    .filter((w) => w.type === "cambodia" && w.status !== "Inactive")
+    .sort((a, b) => String(a.code).localeCompare(String(b.code)));
+
+  const pendingPackages = (packages || []).filter(
+    (p) => String(p.status || "").trim() === "Shipping To Branch",
+  );
+
+  const visiblePending = pendingPackages.filter((p) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return [p.tk, p.customer, p.order_no, p.container_no, p.dest_branch_code]
+      .filter(Boolean)
+      .some((v) => String(v).toLowerCase().includes(q));
+  });
+
+  const historyRows = history.filter((r) => {
+    if (filter === "pending") return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return [r.tk, r.branch_code, r.sorted_by, r.notes]
+      .filter(Boolean)
+      .some((v) => String(v).toLowerCase().includes(q));
+  });
+
+  async function loadHistory() {
+    if (!supabase) {
+      setHistory([]);
+      return;
+    }
+    setLoadingHistory(true);
+    const { data, error: readErr } = await supabase
+      .from("sorting_records")
+      .select("*")
+      .order("sorted_at", { ascending: false })
+      .limit(100);
+    setLoadingHistory(false);
+    if (readErr) {
+      console.error("[sorting_records] read failed", readErr);
+      setError(
+        readErr.code === "42P01"
+          ? "Sorting database table is not ready. Run the Sorting Workspace SQL migration in Supabase."
+          : readErr.message,
+      );
+      return;
+    }
+    setHistory(data || []);
+  }
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    const channel = supabase
+      .channel("cargo-bridge-sorting-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "sorting_records" },
+        () => loadHistory(),
+      )
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  function scanTk(raw) {
+    if (!canScan) {
+      const msg = "You do not have permission to scan TKs for sorting.";
+      setError(msg);
+      scan.fail(msg, false);
+      return;
+    }
+    const value = String(raw || "").trim();
+    if (!value) return;
+
+    scan.begin();
+    setError("");
+    setMessage("");
+
+    const pkg = findPackage(value);
+    if (!pkg) {
+      setSelected(null);
+      setBranch("");
+      const msg = `TK "${value}" was not found.`;
+      scan.fail(msg);
+      setError("");
+      return;
+    }
+    if (String(pkg.status || "").trim() !== "Shipping To Branch") {
+      setSelected(null);
+      setBranch("");
+      const msg = `TK "${pkg.tk}" cannot be sorted from the current status: ${pkg.status || "Unknown"}.`;
+      scan.fail(msg);
+      setError("");
+      return;
+    }
+
+    const defaultBranch =
+      pkg.dest_branch_code || pkg.dest_branch || pkg.receiving_branch || "";
+    setSelected(pkg);
+    setBranch(defaultBranch);
+    setTkInput("");
+    scan.succeed(`TK ${pkg.tk} verified — ready for sorting.`);
+    setMessage(`TK ${pkg.tk} is ready for sorting.`);
+  }
+
+  // Keep Sorting scan timing/behaviour aligned with the real Outbound Origin
+  // scanner: once the operator/scanner pauses for ~250ms, validate whatever
+  // was entered. Do not gate this by a minimum TK length — short/invalid test
+  // values must still leave the blue "Scanning" state and resolve to the
+  // red error state instead of looking stuck forever.
+  useEffect(() => {
+    const value = tkInput.trim();
+    clearTimeout(scanDebounceRef.current);
+    if (!value || !canScan) return undefined;
+
+    scanDebounceRef.current = setTimeout(() => {
+      scanTk(value);
+    }, 250);
+
+    return () => clearTimeout(scanDebounceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tkInput, canScan]);
+
+  useEffect(() => () => clearTimeout(scanDebounceRef.current), []);
+
+  async function confirmSorting() {
+    if (!selected || saving) return;
+    if (!branch) {
+      setError(
+        "Please select the destination branch before confirming sorting.",
+      );
+      return;
+    }
+    if (!canProcess) {
+      setError("You do not have permission to confirm sorting.");
+      return;
+    }
+    const currentDestination = String(
+      selected.dest_branch_code ||
+        selected.dest_branch ||
+        selected.receiving_branch ||
+        "",
+    ).trim();
+    if (branch !== currentDestination && !canChangeBranch) {
+      setError(
+        "Changing the package destination branch requires the Change Branch permission.",
+      );
+      return;
+    }
+    if (!supabase) {
+      setError(
+        "Sorting requires Supabase. Configure the database before confirming.",
+      );
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const current = findPackage(selected.tk);
+      if (!current?.id) throw new Error("Package record was not found.");
+      if (current.status !== "Shipping To Branch") {
+        throw new Error(
+          `This TK has already changed status to ${current.status || "Unknown"}. Please scan it again.`,
+        );
+      }
+
+      const branchRow = branches.find((w) => w.code === branch);
+      const operator = user?.name || user?.email || "System";
+      const now = new Date().toISOString();
+
+      const { data: existingSort, error: existingSortErr } = await supabase
+        .from("sorting_records")
+        .select("id, status")
+        .eq("tk", current.tk)
+        .maybeSingle();
+      if (existingSortErr) throw existingSortErr;
+      if (existingSort) {
+        throw new Error(
+          `TK "${current.tk}" already has a sorting record (${existingSort.status || "Completed"}).`,
+        );
+      }
+
+      // Update the shared package source-of-truth. This makes the package
+      // disappear from the Shipping To Branch queue and appear as Inbound
+      // Warehouse everywhere else (Packages / TK, Package Detail, Dashboard
+      // and other roles).
+      const saved = await upsertPackage({
+        tk: current.tk,
+        status: "Inbound Warehouse",
+        dest_branch_code: branch,
+        updated_by: operator,
+        updated_at: now,
+      });
+      if (!saved) throw new Error("Package update failed.");
+
+      // Then create the operational sorting record for audit/history. If the
+      // audit insert fails, roll the package back so the operation can be
+      // retried without leaving an orphaned status.
+      const { data: sortRow, error: sortErr } = await supabase
+        .from("sorting_records")
+        .insert({
+          package_id: current.id,
+          tk: current.tk,
+          branch_code: branch,
+          branch_name: branchRow?.name || branch,
+          status: "Completed",
+          notes: note.trim() || null,
+          sorted_by: operator,
+          sorted_at: now,
+        })
+        .select("*")
+        .single();
+      if (sortErr) {
+        await upsertPackage({
+          tk: current.tk,
+          status: "Shipping To Branch",
+          dest_branch_code: currentDestination || null,
+          updated_by: operator,
+          updated_at: new Date().toISOString(),
+        });
+        throw sortErr;
+      }
+
+      // Keep the shared timeline/status history consistent with the package
+      // row that was just updated above.
+      const statusHistoryRow = {
+        tk: current.tk,
+        status: "Inbound Warehouse",
+        remark: note.trim() || `Sorted to ${branch}`,
+        created_by: operator,
+        created_at: now,
+      };
+      const { error: historyErr } = await supabase
+        .from("status_history")
+        .insert(statusHistoryRow);
+      if (historyErr) {
+        console.error("[status_history] sorting insert failed", historyErr);
+      }
+
+      await refetch();
+      setSelected(null);
+      setBranch("");
+      setNote("");
+      setMessage(`TK ${current.tk} sorted successfully to ${branch}.`);
+      setHistory((prev) => [sortRow, ...prev].slice(0, 100));
+    } catch (err) {
+      console.error("[sorting_records] save failed", err);
+      setError(err.message || "Unable to confirm sorting.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const statCards = [
+    {
+      label: "Waiting for Sorting",
+      value: pendingPackages.length,
+      icon: Icons.PackageSearch,
+      tone: "text-signal-blue bg-signal-blue/10",
+      key: "pending",
+    },
+    {
+      label: "Sorted Today",
+      value: history.filter((r) => {
+        if (!r.sorted_at) return false;
+        const d = new Date(r.sorted_at);
+        const n = new Date();
+        return d.toDateString() === n.toDateString();
+      }).length,
+      icon: Icons.ListChecks,
+      tone: "text-signal-teal bg-signal-teal/10",
+      key: "history",
+    },
+    {
+      label: "Total Sorting Records",
+      value: history.length,
+      icon: Icons.History,
+      tone: "text-signal-amber bg-signal-amber/10",
+      key: "history",
+    },
+  ];
+
   return (
-    <ScanConfirmPage
-      pageTitle="Sorting"
-      scanTabLabel="Scan Sorting V2"
-      modalTitle="Verify Scan Sorting"
-      fromStatus="Shipping To Branch"
-      toStatus="Inbound Warehouse"
-      alreadyDoneMessage="ត្រូវបានទទួលរួចហើយ"
-      scanPlaceholder="e.g. TK202609250041"
-    />
+    <div className="space-y-4 pb-8">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-xs text-ink-600/45 mb-1">
+            <span>Operations</span>
+            <ChevronRight size={13} />
+            <span>Sorting</span>
+          </div>
+          <h1 className="font-display font-bold text-2xl text-ink-900">
+            Sorting Workspace
+          </h1>
+          <p className="text-sm text-ink-600/55 mt-1">
+            Scan TK → Verify Package → Assign Branch → Confirm Sorting
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-ink-600/50">
+          <span
+            className={`inline-block w-2 h-2 rounded-full ${
+              supabase && warehousesReady ? "bg-signal-teal" : "bg-signal-amber"
+            }`}
+          />
+          {supabase && warehousesReady
+            ? "Database connected"
+            : "Database setup required"}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-md border border-signal-red/20 bg-signal-red/5 px-3.5 py-3 text-sm text-signal-red">
+          <TriangleAlert size={16} className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      {message && (
+        <div className="flex items-center gap-2 rounded-md border border-signal-teal/20 bg-signal-teal/5 px-3.5 py-3 text-sm text-signal-teal">
+          <CircleCheck size={16} className="shrink-0" />
+          <span>{message}</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {statCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <button
+              type="button"
+              key={card.label}
+              onClick={() => setFilter(card.key)}
+              className={`bg-white border rounded-md shadow-panel p-4 text-left transition-colors ${
+                filter === card.key
+                  ? "border-signal-blue/40 ring-1 ring-signal-blue/10"
+                  : "border-mist-200 hover:border-mist-300"
+              }`}
+            >
+              <div
+                className={`w-9 h-9 rounded-md flex items-center justify-center ${card.tone}`}
+              >
+                <Icon size={18} />
+              </div>
+              <div className="mt-3 text-2xl font-bold text-ink-900">
+                {card.value}
+              </div>
+              <div className="text-xs text-ink-600/55 mt-0.5">{card.label}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)] gap-4">
+        <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+          <div className="px-5 py-4 border-b border-mist-200 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="font-display font-bold text-base text-ink-900">
+                Scan & Sort
+              </h2>
+              <p className="text-xs text-ink-600/50 mt-0.5">
+                Only TKs at Shipping To Branch can enter Sorting.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-ink-600/50">Scanner ready</span>
+              <span className="w-2 h-2 rounded-full bg-signal-teal" />
+            </div>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                clearTimeout(scanDebounceRef.current);
+                scanTk(tkInput);
+              }}
+            >
+              <TkScanField
+                label="Scan / Enter Tracking Number"
+                value={tkInput}
+                onChange={(value) => {
+                  if (!value.trim()) scan.reset();
+                  setTkInput(value);
+                  scan.onInput(value);
+                }}
+                placeholder={
+                  canScan ? "Scan TK barcode..." : "No permission to scan TKs"
+                }
+                scan={scan}
+                actionLabel="Verify"
+                onAction={() => {
+                  clearTimeout(scanDebounceRef.current);
+                  scanTk(tkInput);
+                }}
+                actionDisabled={!tkInput.trim() || !canScan}
+              />
+            </form>
+
+            {selected ? (
+              <div className="border border-signal-blue/20 bg-signal-blue/[0.025] rounded-md overflow-hidden">
+                <div className="px-4 py-3 border-b border-mist-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-md bg-signal-blue/10 text-signal-blue flex items-center justify-center">
+                      <Package size={18} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wide text-ink-600/45">
+                        Tracking Number
+                      </div>
+                      <div className="font-bold text-ink-900">
+                        {selected.tk}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="px-2 py-1 rounded-full text-[11px] font-semibold bg-signal-amber/10 text-signal-amber">
+                    {selected.status}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3 p-4">
+                  <div>
+                    <div className="text-[11px] text-ink-600/45 uppercase">
+                      Customer
+                    </div>
+                    <div className="text-sm font-medium text-ink-900 truncate">
+                      {selected.customer || "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-ink-600/45 uppercase">
+                      Order
+                    </div>
+                    <div className="text-sm font-medium text-ink-900">
+                      {selected.order_no || "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-ink-600/45 uppercase">
+                      Container
+                    </div>
+                    <div className="text-sm font-medium text-ink-900">
+                      {selected.container_no || "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-ink-600/45 uppercase">
+                      Weight / CBM
+                    </div>
+                    <div className="text-sm font-medium text-ink-900">
+                      {selected.weight || selected.weight_kg
+                        ? `${selected.weight || selected.weight_kg + " kg"}`
+                        : "—"}
+                      {selected.cbm ? ` · ${selected.cbm} CBM` : ""}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-4 pb-4">
+                  <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1.5">
+                    Destination Branch
+                  </label>
+                  <select
+                    value={branch}
+                    onChange={(e) => setBranch(e.target.value)}
+                    className="w-full bg-white border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue"
+                  >
+                    <option value="">Select Cambodia branch...</option>
+                    {branches.map((w) => (
+                      <option key={w.code} value={w.code}>
+                        {w.code} — {w.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-[11px] text-ink-600/45 mt-1">
+                    Current package destination:{" "}
+                    {selected.dest_branch_code || "Not assigned"}
+                  </div>
+                </div>
+
+                <div className="px-4 pb-4">
+                  <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1.5">
+                    Sorting Note{" "}
+                    <span className="font-normal normal-case">(optional)</span>
+                  </label>
+                  <input
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="e.g. Shelf A-03 / customer requested Phnom Penh branch"
+                    className="w-full bg-white border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue"
+                  />
+                </div>
+
+                <div className="px-4 py-3 border-t border-mist-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelected(null);
+                      setBranch("");
+                      setNote("");
+                    }}
+                    className="text-sm font-medium text-ink-700 border border-mist-200 px-3.5 py-2 rounded-md hover:bg-mist-50"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving || !branch || !canProcess}
+                    onClick={confirmSorting}
+                    title={
+                      !canProcess
+                        ? "Confirm Sorting permission is required"
+                        : undefined
+                    }
+                    className="inline-flex items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50"
+                  >
+                    {saving ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <CircleCheck size={15} />
+                    )}
+                    {saving ? "Confirming..." : "Confirm Sorting"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed border-mist-300 bg-mist-50/40 py-12 text-center">
+                <ScanLine size={28} className="mx-auto text-ink-600/25" />
+                <div className="mt-3 text-sm font-semibold text-ink-700">
+                  Scan a TK to begin
+                </div>
+                <div className="text-xs text-ink-600/45 mt-1">
+                  The package must be in Shipping To Branch status.
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+          <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
+            <div>
+              <h2 className="font-display font-bold text-base text-ink-900">
+                Sorting Queue
+              </h2>
+              <p className="text-xs text-ink-600/50 mt-0.5">
+                TKs currently waiting for branch sorting.
+              </p>
+            </div>
+            <span className="px-2 py-1 rounded-full bg-signal-blue/10 text-signal-blue text-xs font-semibold">
+              {visiblePending.length}
+            </span>
+          </div>
+          <div className="p-4 border-b border-mist-200">
+            <div className="flex items-center gap-2 bg-mist-50 border border-mist-200 rounded-md px-3 py-2">
+              <Search size={15} className="text-ink-600/35" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search TK, customer, order, container..."
+                className="flex-1 bg-transparent outline-none text-sm"
+              />
+            </div>
+          </div>
+          <div className="max-h-[560px] overflow-y-auto divide-y divide-mist-100">
+            {filter === "pending" ? (
+              visiblePending.length ? (
+                visiblePending.map((p) => (
+                  <button
+                    key={p.id || p.tk}
+                    type="button"
+                    onClick={() => {
+                      setSelected(p);
+                      setBranch(p.dest_branch_code || "");
+                      setNote("");
+                      setError("");
+                    }}
+                    className="w-full text-left px-4 py-3 hover:bg-mist-50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-sm text-ink-900 truncate">
+                          {p.tk}
+                        </div>
+                        <div className="text-xs text-ink-600/50 truncate mt-0.5">
+                          {p.customer || "Unknown customer"} ·{" "}
+                          {p.order_no || "No order"}
+                        </div>
+                      </div>
+                      <ChevronRight
+                        size={15}
+                        className="text-ink-600/30 shrink-0"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-600/45 mt-2">
+                      <span>Container: {p.container_no || "—"}</span>
+                      <span>
+                        Branch: {p.dest_branch_code || "Not assigned"}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="py-12 text-center text-sm text-ink-600/45">
+                  No TKs are waiting for sorting.
+                </div>
+              )
+            ) : historyRows.length ? (
+              historyRows.map((r) => (
+                <div key={r.id} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-sm text-ink-900">
+                      {r.tk}
+                    </div>
+                    <span className="text-[11px] font-semibold text-signal-teal bg-signal-teal/10 px-2 py-1 rounded-full">
+                      {r.status || "Completed"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-ink-600/50 mt-1">
+                    {r.branch_code} · {r.branch_name || "Cambodia Branch"}
+                  </div>
+                  <div className="text-[11px] text-ink-600/40 mt-1">
+                    {r.sorted_by || "System"} ·{" "}
+                    {r.sorted_at ? formatIso(r.sorted_at) : "—"}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="py-12 text-center text-sm text-ink-600/45">
+                {loadingHistory
+                  ? "Loading sorting history..."
+                  : "No sorting records yet."}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+        <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
+          <div>
+            <h2 className="font-display font-bold text-base text-ink-900">
+              Sorting Process
+            </h2>
+            <p className="text-xs text-ink-600/50 mt-0.5">
+              Every confirmed scan is stored for cross-device audit.
+            </p>
+          </div>
+          <History size={17} className="text-ink-600/35" />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-mist-200">
+          {[
+            ["01", "Scan TK", "Identify the shared package record"],
+            ["02", "Verify", "Check customer, order and container"],
+            ["03", "Assign Branch", "Choose the active Cambodia branch"],
+            ["04", "Confirm", "Move TK to Inbound Warehouse"],
+          ].map(([no, title, desc]) => (
+            <div key={no} className="p-4 flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center text-xs font-bold shrink-0">
+                {no}
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-ink-900">
+                  {title}
+                </div>
+                <div className="text-xs text-ink-600/50 mt-1 leading-5">
+                  {desc}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -10662,9 +11659,21 @@ function ListPage({
     // per-stage details (supplier, method, location, ...) without
     // cramming them onto the `packages` table itself.
     if (supabase) {
-      await supabase
+      const { error: stageErr } = await supabase
         .from(pathToTable(path))
         .insert({ ...values, tk: existing.tk, package_id: existing.id });
+      // Don't block the scan (the package status below is the source of
+      // truth), but never swallow the failure silently any more — the
+      // message tells you which column/policy the table is missing.
+      if (stageErr) {
+        console.error(`[${pathToTable(path)}] insert failed`, {
+          message: stageErr.message,
+          details: stageErr.details,
+          hint: stageErr.hint,
+          code: stageErr.code,
+          payload: { ...values, tk: existing.tk, package_id: existing.id },
+        });
+      }
     }
 
     return upsertPackage({
@@ -13300,6 +14309,8 @@ function PackageDetail() {
   const { user } = useAuth();
   const {
     getTimeline,
+    getHistory,
+    loadDbHistory,
     advance,
     findPackage,
     ready: pkgReady,
@@ -13314,8 +14325,67 @@ function PackageDetail() {
   // registry record on top so real, captured fields win and only
   // genuinely-unknown fields stay as "—".
   const registryRecord = findPackage(tk);
+  const [livePackage, setLivePackage] = useState(null);
+  const [livePackageError, setLivePackageError] = useState("");
   const baseline = PACKAGE_DETAILS[tk] || packageFallbackDetail(tk);
-  const data = registryRecord ? { ...baseline, ...registryRecord } : baseline;
+
+  // Package Detail reads the TK directly from Supabase instead of relying
+  // only on the Provider's localStorage warm cache. This is the final
+  // source-of-truth guard that prevents Staff from seeing an old status
+  // after Super Admin changes the same package.
+  useEffect(() => {
+    if (!supabase || !tk) return undefined;
+    let alive = true;
+
+    const fetchLivePackage = async () => {
+      const { data: row, error } = await supabase
+        .from("packages")
+        .select("*")
+        .eq("tk", tk)
+        .maybeSingle();
+      if (!alive) return;
+      if (error) {
+        setLivePackageError(
+          error.message || "Unable to read package from Supabase",
+        );
+        console.error("[PackageDetail] Supabase package read failed", {
+          tk,
+          error,
+        });
+        return;
+      }
+      setLivePackageError("");
+      if (row) setLivePackage(row);
+    };
+
+    fetchLivePackage();
+    const timer = window.setInterval(fetchLivePackage, 5000);
+    const onFocus = () => fetchLivePackage();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [tk]);
+
+  // Keep the Tracking Timeline / activity log in step with Supabase too, so
+  // Staff sees the same stage times and "Proceed By" as Admin.
+  useEffect(() => {
+    if (!supabase || !tk) return undefined;
+    loadDbHistory(tk);
+    const timer = window.setInterval(() => loadDbHistory(tk), 5000);
+    const onFocus = () => loadDbHistory(tk);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [tk, loadDbHistory]);
+
+  const sourceRecord = livePackage || registryRecord;
+  const data = sourceRecord ? { ...baseline, ...sourceRecord } : baseline;
   const timeline = getTimeline(tk);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -13336,7 +14406,13 @@ function PackageDetail() {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
+  const dbStage = PACKAGE_STAGES.includes(
+    String(sourceRecord?.status || "").trim(),
+  )
+    ? String(sourceRecord.status).trim()
+    : null;
   const currentStage =
+    dbStage ||
     timeline.find((s) => s.state === "active")?.label ||
     [...timeline].reverse().find((s) => s.state === "done")?.label ||
     timeline[0].label;
@@ -13496,6 +14572,17 @@ function PackageDetail() {
   const historyRows = [...timeline]
     .filter((s) => s.state !== "pending")
     .reverse();
+  const activityRows = [...(getHistory(data.tk) || [])].reverse().slice(0, 6);
+  const weightValue =
+    data.weight_kg != null && data.weight_kg !== ""
+      ? `${data.weight_kg} kg`
+      : data.weight != null && data.weight !== ""
+        ? `${data.weight} kg`
+        : "—";
+  const cbmValue = data.cbm != null && data.cbm !== "" ? String(data.cbm) : "—";
+  const destinationValue =
+    data.dest_branch_code || data.dest_branch || data.receiving_branch || "—";
+  const packageCountValue = data.package_count || 1;
 
   function copyTk() {
     navigator.clipboard?.writeText(data.tk);
@@ -13574,10 +14661,32 @@ function PackageDetail() {
                   <div className="text-[11px] text-ink-600/45 mt-1.5">
                     Last Updated: {lastUpdated}
                   </div>
+                  {livePackageError && (
+                    <div
+                      className="mt-1 text-[10px] text-signal-red/80"
+                      title={livePackageError}
+                    >
+                      Live database sync unavailable — showing cached data
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <Link
+                  to={`/process-tracking?tk=${encodeURIComponent(data.tk)}`}
+                  className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
+                >
+                  <Icons.Route size={14} />
+                  Process Tracking
+                </Link>
+                <Link
+                  to={`/scan-center?tk=${encodeURIComponent(data.tk)}`}
+                  className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90"
+                >
+                  <Icons.ScanLine size={14} />
+                  Scan TK
+                </Link>
                 {canPrintLabel && (
                   <button
                     type="button"
@@ -13675,6 +14784,65 @@ function PackageDetail() {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Operational summary — compact facts operators need most often. */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              {
+                label: "Weight",
+                value: weightValue,
+                icon: Icons.Scale,
+                tone: "blue",
+              },
+              { label: "CBM", value: cbmValue, icon: Icons.Box, tone: "teal" },
+              {
+                label: "Container",
+                value: containerNo || "Not Assigned",
+                icon: ContainerIcon,
+                tone: "ink",
+              },
+              {
+                label: "Destination",
+                value: destinationValue,
+                icon: Icons.MapPin,
+                tone: "amber",
+              },
+            ].map(({ label, value, icon: I, tone }) => {
+              const toneClass =
+                tone === "blue"
+                  ? "bg-signal-blue/10 text-signal-blue"
+                  : tone === "teal"
+                    ? "bg-signal-teal/10 text-signal-teal"
+                    : tone === "amber"
+                      ? "bg-signal-amber/10 text-signal-amber"
+                      : "bg-mist-100 text-ink-700";
+              return (
+                <div
+                  key={label}
+                  className="bg-white border border-mist-200 rounded-md shadow-panel p-4 min-w-0"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 ${toneClass}`}
+                    >
+                      <I size={15} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] uppercase tracking-wide font-semibold text-ink-600/45">
+                        {label}
+                      </div>
+                      <div
+                        className="text-sm font-bold text-ink-900 mt-0.5 truncate"
+                        title={String(value)}
+                      >
+                        {value}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {data.exception && (
@@ -13787,7 +14955,9 @@ function PackageDetail() {
                   <KV k="CBM" v={data.cbm} />
                   <KV k="Dimensions" v={dimensionText} />
                   <KV k="Supplier" v={data.supplier} />
-                  <KV k="Packages" v={data.package_count || 1} />
+                  <KV k="Packages" v={packageCountValue} />
+                  <KV k="Container" v={containerNo || "Not Assigned"} />
+                  <KV k="Destination" v={destinationValue} />
                 </div>
               </dl>
             </div>
@@ -13845,6 +15015,55 @@ function PackageDetail() {
           </div>
 
           <StatusHistoryCard pkg={data} timeline={timeline} />
+
+          <div className={`${CARD} p-5`}>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
+                  <Icons.History size={16} className="text-ink-600/60" />
+                  Recent Activity
+                </h2>
+                <p className="text-xs text-ink-600/45 mt-0.5">
+                  Latest actions recorded for this package.
+                </p>
+              </div>
+              <span className="text-[11px] font-semibold px-2 py-1 rounded-full bg-mist-100 text-ink-600/55">
+                {activityRows.length} events
+              </span>
+            </div>
+            {activityRows.length ? (
+              <div className="divide-y divide-mist-100">
+                {activityRows.map((item, i) => (
+                  <div
+                    key={`${item.at || "event"}-${i}`}
+                    className="py-3 first:pt-0 last:pb-0 flex items-start gap-3"
+                  >
+                    <div className="w-7 h-7 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
+                      <Check size={13} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-ink-900">
+                          {item.status || "Package Updated"}
+                        </span>
+                        <span className="text-xs text-ink-600/40">
+                          {item.user || "System"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-ink-600/45 mt-0.5">
+                        {item.at ? formatIso(item.at) : "—"}
+                        {item.remark ? ` · ${item.remark}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-6 text-center text-sm text-ink-600/45">
+                No activity history yet.
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ============ RIGHT / SIDEBAR ============ */}
@@ -21073,8 +22292,10 @@ function RoleManagementPage() {
 function ProcessTrackingPage() {
   const { user } = useAuth();
   const { packages, getTimeline, getHistory, ready } = usePackageTracking();
-  const [query, setQuery] = useState("");
-  const [selectedTk, setSelectedTk] = useState("");
+  const [searchParams] = useSearchParams();
+  const initialTk = searchParams.get("tk") || "";
+  const [query, setQuery] = useState(initialTk);
+  const [selectedTk, setSelectedTk] = useState(initialTk);
 
   const canView =
     hasPermission(user, "tk.view") || hasPermission(user, "tk.scan");
@@ -21160,7 +22381,7 @@ function ProcessTrackingPage() {
           to="/scan-center"
           className="inline-flex items-center gap-2 bg-signal-blue text-white text-sm font-semibold px-3.5 py-2.5 rounded-md hover:bg-signal-blue/90"
         >
-          <ScanLine size={15} /> Scan TK
+          <Icons.ScanLine size={15} /> Scan TK
         </Link>
       </div>
 
@@ -21371,7 +22592,7 @@ function ProcessTrackingPage() {
                       Latest events recorded for this TK.
                     </p>
                   </div>
-                  <History size={17} className="text-ink-600/35" />
+                  <Icons.History size={17} className="text-ink-600/35" />
                 </div>
                 {history.length ? (
                   <div className="divide-y divide-mist-200">
@@ -21426,6 +22647,8 @@ function ScanCenterPage() {
   const { user } = useAuth();
   const { packages, findPackage, getHistory, syncTimelineToStatus, ready } =
     usePackageTracking();
+  const [searchParams] = useSearchParams();
+  const initialTk = searchParams.get("tk") || "";
   const [value, setValue] = useState("");
   const [selected, setSelected] = useState(null);
   const [confirming, setConfirming] = useState(false);
@@ -21442,6 +22665,11 @@ function ScanCenterPage() {
     inputRef.current?.focus();
     return () => clearTimeout(timerRef.current);
   }, []);
+
+  useEffect(() => {
+    if (ready && initialTk) lookup(initialTk);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, initialTk]);
 
   const stageIndex = (status) => PACKAGE_STAGES.indexOf(status);
   const nextStageFor = (pkg) => {
@@ -21573,7 +22801,7 @@ function ScanCenterPage() {
       <div>
         <div className="flex items-center gap-2">
           <div className="w-9 h-9 rounded-lg bg-signal-blue/10 text-signal-blue flex items-center justify-center">
-            <ScanLine size={19} />
+            <Icons.ScanLine size={19} />
           </div>
           <div>
             <h1 className="font-display font-bold text-xl text-ink-900">
@@ -21629,7 +22857,10 @@ function ScanCenterPage() {
               }}
             >
               <div className="flex items-center gap-3 border-2 border-mist-200 rounded-lg px-4 py-3.5 focus-within:border-signal-blue focus-within:ring-4 focus-within:ring-signal-blue/5">
-                <ScanLine size={20} className="text-signal-blue shrink-0" />
+                <Icons.ScanLine
+                  size={20}
+                  className="text-signal-blue shrink-0"
+                />
                 <input
                   ref={inputRef}
                   autoFocus
@@ -21711,7 +22942,7 @@ function ScanCenterPage() {
                     Current Status
                   </span>
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-signal-blue/10 text-signal-blue text-xs font-semibold">
-                    <Circle size={8} fill="currentColor" />{" "}
+                    <Icons.Circle size={8} fill="currentColor" />{" "}
                     {selected.status || "Unknown"}
                   </span>
                   <span className="text-xs text-ink-600/45">
@@ -21733,7 +22964,7 @@ function ScanCenterPage() {
                     Latest status events recorded for this TK.
                   </p>
                 </div>
-                <History size={17} className="text-ink-600/35" />
+                <Icons.History size={17} className="text-ink-600/35" />
               </div>
               {history.length ? (
                 <div className="divide-y divide-mist-200">
@@ -21781,7 +23012,10 @@ function ScanCenterPage() {
           <div className="p-5">
             {!selected ? (
               <div className="py-10 text-center">
-                <ScanLine size={30} className="mx-auto text-ink-600/20 mb-3" />
+                <Icons.ScanLine
+                  size={30}
+                  className="mx-auto text-ink-600/20 mb-3"
+                />
                 <p className="text-sm font-medium text-ink-600/55">
                   Waiting for TK scan
                 </p>
@@ -21836,7 +23070,7 @@ function ScanCenterPage() {
                     className="w-full inline-flex justify-center items-center gap-2 bg-signal-blue text-white text-sm font-semibold px-4 py-2.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-40"
                   >
                     {confirming ? (
-                      <Loader2 size={16} className="animate-spin" />
+                      <Icons.Loader2 size={16} className="animate-spin" />
                     ) : (
                       <Check size={16} />
                     )}
@@ -21853,6 +23087,574 @@ function ScanCenterPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// pages/ExceptionCenterPage.jsx
+// ------------------------------------------------------------
+// Central exception workflow connected to the shared TK/package registry.
+// UI-only records are persisted in localStorage so the module remains usable
+// before a dedicated Supabase exceptions table is installed.
+const EXCEPTION_TYPES = [
+  "Missing Package",
+  "Damaged Package",
+  "Wrong TK",
+  "Wrong Container",
+  "Weight Difference",
+  "CBM Difference",
+  "Duplicate Scan",
+  "Customs Issue",
+  "Delivery Issue",
+  "Other",
+];
+
+const EXCEPTION_STATUSES = ["Open", "Investigating", "Resolved", "Closed"];
+
+function ExceptionCenterPage() {
+  const { user } = useAuth();
+  const { packages, findPackage, getHistory } = usePackageTracking();
+  const [exceptions, setExceptions] = usePersistentState(
+    "cargo_bridge_exceptions",
+    [],
+  );
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [form, setForm] = useState({
+    tk: "",
+    type: EXCEPTION_TYPES[0],
+    priority: "Medium",
+    description: "",
+  });
+
+  const canManage =
+    hasPermission(user, "tk.edit") || hasPermission(user, "tk.process");
+
+  const filtered = React.useMemo(() => {
+    const q = String(query || "")
+      .trim()
+      .toLowerCase();
+    return exceptions
+      .filter((e) => statusFilter === "All" || e.status === statusFilter)
+      .filter((e) => typeFilter === "All" || e.type === typeFilter)
+      .filter((e) => {
+        if (!q) return true;
+        return [e.id, e.tk, e.type, e.description, e.createdBy, e.assignee]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      })
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }, [exceptions, query, statusFilter, typeFilter]);
+
+  const selected = exceptions.find((e) => e.id === selectedId) || null;
+  const counts = React.useMemo(
+    () =>
+      EXCEPTION_STATUSES.reduce(
+        (acc, s) => ({
+          ...acc,
+          [s]: exceptions.filter((e) => e.status === s).length,
+        }),
+        {},
+      ),
+    [exceptions],
+  );
+
+  function createException(e) {
+    e.preventDefault();
+    if (!canManage) return;
+    const tk = String(form.tk || "").trim();
+    if (!tk) {
+      setNotice("Enter a TK number.");
+      return;
+    }
+    const pkg = findPackage(tk);
+    if (!pkg) {
+      setNotice(`TK "${tk}" was not found in Packages / TK.`);
+      return;
+    }
+    if (!form.description.trim()) {
+      setNotice("Add a short description before creating the exception.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const record = {
+      id: `EX-${Date.now().toString(36).toUpperCase()}`,
+      tk: pkg.tk,
+      type: form.type,
+      priority: form.priority,
+      description: form.description.trim(),
+      status: "Open",
+      createdAt: now,
+      createdBy: user?.name || "Admin",
+      assignee: "Unassigned",
+      resolvedAt: null,
+      resolution: "",
+      packageSnapshot: {
+        customer: pkg.customer || pkg.customer_name || "—",
+        order: pkg.order_no || pkg.order_id || "—",
+        container: pkg.container_no || pkg.container || "—",
+        status: pkg.status || "—",
+      },
+    };
+    setExceptions((prev) => [record, ...prev]);
+    setSelectedId(record.id);
+    setShowCreate(false);
+    setForm({
+      tk: "",
+      type: EXCEPTION_TYPES[0],
+      priority: "Medium",
+      description: "",
+    });
+    setNotice("Exception created successfully.");
+  }
+
+  function updateException(id, patch) {
+    if (!canManage) return;
+    setExceptions((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        const next = { ...e, ...patch };
+        if (patch.status === "Resolved" && !e.resolvedAt)
+          next.resolvedAt = new Date().toISOString();
+        if (patch.status === "Closed" && !e.resolvedAt)
+          next.resolvedAt = new Date().toISOString();
+        return next;
+      }),
+    );
+  }
+
+  if (!canManage && !hasPermission(user, "tk.view")) {
+    return (
+      <div className="bg-white border border-mist-200 rounded-md shadow-panel p-10 text-center">
+        <Icons.LockKeyhole size={28} className="mx-auto text-ink-600/25 mb-3" />
+        <h1 className="font-display font-bold text-lg text-ink-900">
+          Exception Center
+        </h1>
+        <p className="text-sm text-ink-600/55 mt-1">
+          You do not have permission to view exceptions.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+            <Icons.TriangleAlert size={20} />
+          </div>
+          <div>
+            <h1 className="font-display font-bold text-xl text-ink-900">
+              Exception Center
+            </h1>
+            <p className="text-sm text-ink-600/55">
+              Review, investigate, resolve, and close package exceptions.
+            </p>
+          </div>
+        </div>
+        {canManage && (
+          <button
+            onClick={() => {
+              setNotice("");
+              setShowCreate(true);
+            }}
+            className="inline-flex items-center gap-2 bg-signal-blue text-white text-sm font-semibold px-3.5 py-2.5 rounded-md hover:bg-signal-blue/90"
+          >
+            <Plus size={16} /> Create Exception
+          </button>
+        )}
+      </div>
+
+      {notice && (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-signal-blue/15 bg-signal-blue/5 px-4 py-3 text-sm text-ink-800">
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")}>
+            <Icons.X size={15} />
+          </button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {EXCEPTION_STATUSES.map((s) => (
+          <button
+            key={s}
+            onClick={() => setStatusFilter(statusFilter === s ? "All" : s)}
+            className={`text-left bg-white border rounded-md shadow-panel px-4 py-3 ${statusFilter === s ? "border-signal-blue ring-2 ring-signal-blue/10" : "border-mist-200"}`}
+          >
+            <div className="text-[11px] uppercase tracking-wide font-semibold text-ink-600/45">
+              {s}
+            </div>
+            <div className="text-xl font-bold text-ink-900 mt-1">
+              {counts[s] || 0}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+        <div className="p-4 border-b border-mist-200 flex flex-wrap gap-2">
+          <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 flex-1 min-w-[220px] focus-within:border-signal-blue">
+            <Search size={15} className="text-ink-600/35" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search Exception ID, TK, type..."
+              className="flex-1 outline-none bg-transparent text-sm"
+            />
+          </div>
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="border border-mist-200 rounded-md px-3 py-2 text-sm bg-white outline-none"
+          >
+            <option value="All">All Types</option>
+            {EXCEPTION_TYPES.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="border border-mist-200 rounded-md px-3 py-2 text-sm bg-white outline-none"
+          >
+            <option value="All">All Statuses</option>
+            {EXCEPTION_STATUSES.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[900px]">
+            <thead>
+              <tr className="bg-mist-50 text-left text-[11px] uppercase tracking-wide text-ink-600/50">
+                {[
+                  "Exception",
+                  "TK / Package",
+                  "Type",
+                  "Priority",
+                  "Status",
+                  "Created",
+                  "Action",
+                ].map((h) => (
+                  <th key={h} className="px-4 py-3 font-semibold">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((e) => (
+                <tr
+                  key={e.id}
+                  className="border-t border-mist-100 hover:bg-mist-50/60"
+                >
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-xs font-bold text-ink-900">
+                      {e.id}
+                    </div>
+                    <div className="text-xs text-ink-600/50 mt-1 truncate max-w-[220px]">
+                      {e.description}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-mono font-semibold text-ink-900">
+                      {e.tk}
+                    </div>
+                    <div className="text-xs text-ink-600/50 mt-1">
+                      {e.packageSnapshot?.customer || "—"}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-ink-800">{e.type}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex px-2 py-1 rounded-full text-[11px] font-semibold ${e.priority === "High" ? "bg-red-50 text-red-600" : e.priority === "Medium" ? "bg-amber-50 text-amber-700" : "bg-mist-100 text-ink-600"}`}
+                    >
+                      {e.priority}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex px-2 py-1 rounded-full text-[11px] font-semibold ${e.status === "Open" ? "bg-blue-50 text-blue-700" : e.status === "Investigating" ? "bg-violet-50 text-violet-700" : e.status === "Resolved" ? "bg-emerald-50 text-emerald-700" : "bg-mist-100 text-ink-600"}`}
+                    >
+                      {e.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-ink-600/55">
+                    {new Date(e.createdAt).toLocaleString("en-US")}
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => setSelectedId(e.id)}
+                      className="inline-flex items-center gap-1.5 border border-mist-200 px-2.5 py-1.5 rounded-md text-xs font-semibold hover:bg-white"
+                    >
+                      <Eye size={14} /> View
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!filtered.length && (
+                <tr>
+                  <td
+                    colSpan="7"
+                    className="px-6 py-14 text-center text-sm text-ink-600/45"
+                  >
+                    <Icons.TriangleAlert
+                      size={28}
+                      className="mx-auto mb-2 opacity-30"
+                    />
+                    No exceptions found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {selected && (
+        <div
+          className="fixed inset-0 z-50 bg-ink-900/40 flex items-center justify-center p-4"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setSelectedId(null)
+          }
+        >
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="px-5 py-4 border-b border-mist-200 flex items-start justify-between gap-3">
+              <div>
+                <div className="font-mono font-bold text-ink-900">
+                  {selected.id}
+                </div>
+                <div className="text-sm text-ink-600/55 mt-1">
+                  TK {selected.tk}
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedId(null)}
+                className="w-8 h-8 rounded-md hover:bg-mist-50 flex items-center justify-center"
+              >
+                <Icons.X size={17} />
+              </button>
+            </div>
+            <div className="p-5 space-y-5">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {Object.entries({
+                  Customer: selected.packageSnapshot?.customer,
+                  Order: selected.packageSnapshot?.order,
+                  Container: selected.packageSnapshot?.container,
+                  "Package Status": selected.packageSnapshot?.status,
+                }).map(([k, v]) => (
+                  <div
+                    key={k}
+                    className="bg-mist-50 border border-mist-200 rounded-lg p-3"
+                  >
+                    <div className="text-[10px] uppercase tracking-wide text-ink-600/45 font-semibold">
+                      {k}
+                    </div>
+                    <div className="text-sm font-semibold mt-1 truncate">
+                      {v || "—"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-ink-600/55">
+                    Status
+                  </label>
+                  <select
+                    disabled={!canManage}
+                    value={selected.status}
+                    onChange={(e) =>
+                      updateException(selected.id, { status: e.target.value })
+                    }
+                    className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2 text-sm bg-white"
+                  >
+                    <option>Open</option>
+                    <option>Investigating</option>
+                    <option>Resolved</option>
+                    <option>Closed</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-ink-600/55">
+                    Priority
+                  </label>
+                  <select
+                    disabled={!canManage}
+                    value={selected.priority}
+                    onChange={(e) =>
+                      updateException(selected.id, { priority: e.target.value })
+                    }
+                    className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2 text-sm bg-white"
+                  >
+                    <option>Low</option>
+                    <option>Medium</option>
+                    <option>High</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-ink-600/55">
+                  Description
+                </div>
+                <div className="mt-1 rounded-md border border-mist-200 bg-mist-50 p-3 text-sm text-ink-800">
+                  {selected.description}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-xs text-ink-600/50">
+                  Created by {selected.createdBy} ·{" "}
+                  {new Date(selected.createdAt).toLocaleString("en-US")}
+                </div>
+                <Link
+                  to={`/packages/${encodeURIComponent(selected.tk)}`}
+                  onClick={() => setSelectedId(null)}
+                  className="inline-flex items-center gap-1.5 text-sm font-semibold text-signal-blue hover:underline"
+                >
+                  <Package size={15} /> Open Package Details
+                </Link>
+              </div>
+              <div className="border-t border-mist-200 pt-4">
+                <div className="text-sm font-semibold text-ink-900 mb-3">
+                  Package Activity
+                </div>
+                {getHistory(selected.tk)
+                  .slice(-6)
+                  .reverse()
+                  .map((h, i) => (
+                    <div
+                      key={i}
+                      className="flex gap-3 py-2 border-b border-mist-100 last:border-0"
+                    >
+                      <div className="w-2 h-2 rounded-full bg-signal-blue mt-1.5 shrink-0" />
+                      <div>
+                        <div className="text-xs font-semibold">{h.status}</div>
+                        <div className="text-[11px] text-ink-600/50">
+                          {h.user} ·{" "}
+                          {h.at ? new Date(h.at).toLocaleString("en-US") : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCreate && (
+        <div
+          className="fixed inset-0 z-50 bg-ink-900/40 flex items-center justify-center p-4"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setShowCreate(false)
+          }
+        >
+          <form
+            onSubmit={createException}
+            className="bg-white rounded-xl shadow-2xl w-full max-w-lg"
+          >
+            <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-ink-900">Create Exception</h2>
+                <p className="text-xs text-ink-600/50 mt-1">
+                  Link the issue to an existing TK / package.
+                </p>
+              </div>
+              <button type="button" onClick={() => setShowCreate(false)}>
+                <Icons.X size={17} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-ink-600/55">
+                  TK Number
+                </label>
+                <input
+                  autoFocus
+                  value={form.tk}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, tk: e.target.value }))
+                  }
+                  placeholder="e.g. TK202609250041"
+                  className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-ink-600/55">
+                    Exception Type
+                  </label>
+                  <select
+                    value={form.type}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, type: e.target.value }))
+                    }
+                    className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2.5 text-sm bg-white"
+                  >
+                    {EXCEPTION_TYPES.map((t) => (
+                      <option key={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-ink-600/55">
+                    Priority
+                  </label>
+                  <select
+                    value={form.priority}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, priority: e.target.value }))
+                    }
+                    className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2.5 text-sm bg-white"
+                  >
+                    <option>Low</option>
+                    <option>Medium</option>
+                    <option>High</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-ink-600/55">
+                  Description
+                </label>
+                <textarea
+                  value={form.description}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, description: e.target.value }))
+                  }
+                  rows="4"
+                  placeholder="Describe what happened..."
+                  className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue resize-none"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-mist-200 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCreate(false)}
+                className="px-3.5 py-2 rounded-md border border-mist-200 text-sm font-semibold hover:bg-mist-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-3.5 py-2 rounded-md bg-signal-blue text-white text-sm font-semibold hover:bg-signal-blue/90"
+              >
+                Create Exception
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -21906,6 +23708,7 @@ function AdminApp() {
           <Route path="/shipment-lookup" element={<ShipmentLookup />} />
           <Route path="/scan-center" element={<ScanCenterPage />} />
           <Route path="/process-tracking" element={<ProcessTrackingPage />} />
+          <Route path="/exceptions" element={<ExceptionCenterPage />} />
           <Route path="/wh-arrived" element={<WHArrivedPage />} />
           <Route path="/sorting" element={<SortingPage />} />
           <Route path="/warehouses" element={<WarehouseManagementPage />} />
@@ -21919,6 +23722,7 @@ function AdminApp() {
             (item) =>
               ![
                 "/process-tracking",
+                "/exceptions",
                 "/wh-arrived",
                 "/sorting",
                 "/warehouses",
