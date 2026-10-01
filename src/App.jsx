@@ -12597,6 +12597,9 @@ const STAGE_DOTS = ["🇨🇳", "🚢", "🇰🇭"];
 
 function Login() {
   const { user, login, isMock } = useAuth();
+  const systemSettings = useSystemSettings();
+  const loginCompany =
+    systemSettings?.company || DEFAULT_SYSTEM_SETTINGS.company;
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -12684,8 +12687,16 @@ function Login() {
       <div className="relative z-10 w-full max-w-[440px]">
         <div className="rounded-[24px] border border-white/80 bg-white/95 p-7 shadow-[0_24px_80px_rgba(15,42,85,0.12)] backdrop-blur-xl sm:p-9">
           <div className="text-center">
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-signal-blue shadow-lg shadow-blue-500/20">
-              <Waypoints size={27} className="text-white" />
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-signal-blue shadow-lg shadow-blue-500/20">
+              {loginCompany.logoUrl || loginCompany.logoDataUrl ? (
+                <img
+                  src={loginCompany.logoUrl || loginCompany.logoDataUrl}
+                  alt={`${loginCompany.name || "Company"} logo`}
+                  className="h-full w-full bg-white object-contain p-1.5"
+                />
+              ) : (
+                <Waypoints size={27} className="text-white" />
+              )}
             </div>
             <div className="font-display text-xl font-extrabold tracking-tight text-ink-900">
               {loginCompany.name || "Cargo Bridge"}
