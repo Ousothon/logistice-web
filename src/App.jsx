@@ -59,6 +59,10 @@ import {
   Construction,
   X,
   Save,
+  ScanLine,
+  Loader2,
+  History,
+  Circle,
 } from "lucide-react";
 
 import { createClient } from "@supabase/supabase-js";
@@ -477,6 +481,8 @@ const NAV_SECTIONS = [
     label: "Operations",
     items: [
       { label: "Packages / TK", icon: "Package", path: "/packages" },
+      { label: "Scan Center", icon: "ScanLine", path: "/scan-center" },
+      { label: "Process Tracking", icon: "Route", path: "/process-tracking" },
       { label: "Inbound Origin", icon: "LogIn", path: "/inbound-origin" },
       { label: "Outbound Origin", icon: "LogOut", path: "/outbound-origin" },
       { label: "Shipments", icon: "Truck", path: "/shipments" },
@@ -21059,6 +21065,799 @@ function RoleManagementPage() {
 }
 
 // ------------------------------------------------------------
+// pages/ProcessTrackingPage.jsx
+// ------------------------------------------------------------
+// End-to-end TK tracking view restored alongside Scan Center.
+// Search a shared package registry record, inspect its journey timeline,
+// recent activity, and open the detailed package / scan workflows.
+function ProcessTrackingPage() {
+  const { user } = useAuth();
+  const { packages, getTimeline, getHistory, ready } = usePackageTracking();
+  const [query, setQuery] = useState("");
+  const [selectedTk, setSelectedTk] = useState("");
+
+  const canView =
+    hasPermission(user, "tk.view") || hasPermission(user, "tk.scan");
+
+  const matches = React.useMemo(() => {
+    const q = String(query || "")
+      .trim()
+      .toLowerCase();
+    if (!q) return packages;
+    return packages.filter((p) => {
+      const haystack = [
+        p.tk,
+        p.order_no,
+        p.order_id,
+        p.customer,
+        p.customer_name,
+        p.container_no,
+        p.container,
+        p.branch,
+        p.receiving_branch,
+        p.receivingBranch,
+        p.status,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [packages, query]);
+
+  useEffect(() => {
+    if (!selectedTk || !matches.some((p) => p.tk === selectedTk)) {
+      setSelectedTk(matches[0]?.tk || "");
+    }
+  }, [matches, selectedTk]);
+
+  const selected = matches.find((p) => p.tk === selectedTk) || null;
+  const timeline = selected ? getTimeline(selected.tk) : [];
+  const history = selected
+    ? [...getHistory(selected.tk)].reverse().slice(0, 8)
+    : [];
+  const currentIndex = Math.max(
+    0,
+    PACKAGE_STAGES.indexOf(selected?.status || ""),
+  );
+
+  const stageCount = (status) =>
+    packages.filter((p) => p.status === status).length;
+
+  if (!canView) {
+    return (
+      <div className="bg-white border border-mist-200 rounded-md shadow-panel p-10 text-center">
+        <Icons.LockKeyhole size={28} className="mx-auto text-ink-600/25 mb-3" />
+        <h1 className="font-display font-bold text-lg text-ink-900">
+          Process Tracking
+        </h1>
+        <p className="text-sm text-ink-600/55 mt-1">
+          You do not have permission to view package tracking.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-lg bg-signal-blue/10 text-signal-blue flex items-center justify-center">
+              <Icons.Route size={19} />
+            </div>
+            <div>
+              <h1 className="font-display font-bold text-xl text-ink-900">
+                Process Tracking
+              </h1>
+              <p className="text-sm text-ink-600/55">
+                Follow a TK from Inbound Origin through delivery completion.
+              </p>
+            </div>
+          </div>
+        </div>
+        <Link
+          to="/scan-center"
+          className="inline-flex items-center gap-2 bg-signal-blue text-white text-sm font-semibold px-3.5 py-2.5 rounded-md hover:bg-signal-blue/90"
+        >
+          <ScanLine size={15} /> Scan TK
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        {PACKAGE_STAGES.map((stage, i) => (
+          <div
+            key={stage}
+            className="bg-white border border-mist-200 rounded-md shadow-panel px-4 py-3"
+          >
+            <div className="text-[11px] uppercase tracking-wide font-semibold text-ink-600/45">
+              {stage}
+            </div>
+            <div className="text-xl font-bold text-ink-900 mt-1">
+              {stageCount(stage).toLocaleString("en-US")}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)] gap-5 items-start">
+        <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden lg:sticky lg:top-5">
+          <div className="px-4 py-4 border-b border-mist-200">
+            <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 focus-within:border-signal-blue">
+              <Search size={15} className="text-ink-600/35" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search TK, order, customer, container..."
+                className="flex-1 min-w-0 outline-none bg-transparent text-sm"
+              />
+            </div>
+            <div className="text-xs text-ink-600/45 mt-2">
+              {ready
+                ? `${matches.length} package${matches.length === 1 ? "" : "s"}`
+                : "Loading packages..."}
+            </div>
+          </div>
+          <div className="max-h-[620px] overflow-y-auto divide-y divide-mist-100">
+            {!matches.length ? (
+              <div className="px-5 py-12 text-center text-sm text-ink-600/45">
+                No matching packages.
+              </div>
+            ) : (
+              matches.map((p) => (
+                <button
+                  type="button"
+                  key={p.tk}
+                  onClick={() => setSelectedTk(p.tk)}
+                  className={`w-full text-left px-4 py-3.5 hover:bg-mist-50 transition-colors ${selectedTk === p.tk ? "bg-signal-blue/5 border-l-2 border-signal-blue" : "border-l-2 border-transparent"}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-sm font-bold text-ink-900 truncate">
+                      {p.tk}
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-mist-100 text-ink-600/60 whitespace-nowrap">
+                      {p.status || "Inbound Origin"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-ink-600/55 mt-1 truncate">
+                    {p.customer || p.customer_name || "Unknown customer"}
+                  </div>
+                  <div className="text-[11px] text-ink-600/40 mt-1 truncate">
+                    Order {p.order_no || p.order_id || "—"} · Container{" "}
+                    {p.container_no || p.container || "—"}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          {!selected ? (
+            <div className="bg-white border border-mist-200 rounded-md shadow-panel px-6 py-16 text-center">
+              <Icons.Route size={32} className="mx-auto text-ink-600/20 mb-3" />
+              <h2 className="text-sm font-semibold text-ink-900">
+                Select a package
+              </h2>
+              <p className="text-sm text-ink-600/45 mt-1">
+                Choose a TK from the list to view its complete process journey.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+                <div className="px-5 py-4 border-b border-mist-200 flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-base font-bold text-ink-900">
+                        {selected.tk}
+                      </span>
+                      <span className="text-[11px] font-semibold px-2 py-1 rounded-full bg-signal-blue/10 text-signal-blue">
+                        {selected.status || "Inbound Origin"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-ink-600/55 mt-1">
+                      {selected.customer ||
+                        selected.customer_name ||
+                        "Unknown customer"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      to={`/packages/${encodeURIComponent(selected.tk)}`}
+                      className="inline-flex items-center gap-1.5 border border-mist-200 text-ink-800 text-sm font-semibold px-3 py-2 rounded-md hover:bg-mist-50"
+                    >
+                      <Eye size={15} /> Package Details
+                    </Link>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-5">
+                  {[
+                    [
+                      "Customer",
+                      selected.customer || selected.customer_name || "—",
+                    ],
+                    ["Order", selected.order_no || selected.order_id || "—"],
+                    [
+                      "Container",
+                      selected.container_no || selected.container || "—",
+                    ],
+                    [
+                      "Receiving Branch",
+                      selected.branch ||
+                        selected.receiving_branch ||
+                        selected.receivingBranch ||
+                        "—",
+                    ],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-lg bg-mist-50 border border-mist-200 p-3"
+                    >
+                      <div className="text-[11px] uppercase tracking-wide font-semibold text-ink-600/45">
+                        {label}
+                      </div>
+                      <div
+                        className="text-sm font-semibold text-ink-900 mt-1 truncate"
+                        title={String(value)}
+                      >
+                        {value}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div>
+                    <h2 className="text-sm font-semibold text-ink-900">
+                      Package Journey
+                    </h2>
+                    <p className="text-xs text-ink-600/50 mt-0.5">
+                      Current stage:{" "}
+                      {selected.status || PACKAGE_STAGES[currentIndex]}
+                    </p>
+                  </div>
+                  <span className="text-xs text-ink-600/45">
+                    Step {currentIndex + 1} of {PACKAGE_STAGES.length}
+                  </span>
+                </div>
+                <div className="relative">
+                  <div className="absolute left-[15px] top-4 bottom-4 w-px bg-mist-200" />
+                  <div className="space-y-5">
+                    {timeline.map((step, i) => (
+                      <div
+                        key={`${step.label}-${i}`}
+                        className="relative flex items-start gap-3"
+                      >
+                        <div
+                          className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-2 ${step.state === "done" ? "bg-signal-teal text-white border-signal-teal" : step.state === "active" ? "bg-signal-blue text-white border-signal-blue" : "bg-white text-ink-600/30 border-mist-200"}`}
+                        >
+                          {step.state === "done" ? (
+                            <Check size={14} />
+                          ) : (
+                            <span className="text-[11px] font-bold">
+                              {i + 1}
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0 pt-0.5">
+                          <div className="text-sm font-semibold text-ink-900">
+                            {step.label}
+                          </div>
+                          <div className="text-xs text-ink-600/45 mt-0.5">
+                            {step.time
+                              ? formatIso(step.time)
+                              : step.state === "pending"
+                                ? "Pending"
+                                : "In progress"}
+                            {step.proceedBy ? ` · ${step.proceedBy}` : ""}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-sm font-semibold text-ink-900">
+                      Activity History
+                    </h2>
+                    <p className="text-xs text-ink-600/50 mt-0.5">
+                      Latest events recorded for this TK.
+                    </p>
+                  </div>
+                  <History size={17} className="text-ink-600/35" />
+                </div>
+                {history.length ? (
+                  <div className="divide-y divide-mist-200">
+                    {history.map((h, i) => (
+                      <div
+                        key={`${h.at}-${i}`}
+                        className="py-3 flex items-start gap-3"
+                      >
+                        <div className="w-7 h-7 rounded-full bg-mist-100 flex items-center justify-center shrink-0">
+                          <Check size={13} className="text-signal-teal" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-ink-900">
+                              {h.status}
+                            </span>
+                            <span className="text-xs text-ink-600/40">
+                              {h.user || "System"}
+                            </span>
+                          </div>
+                          <div className="text-xs text-ink-600/45 mt-0.5">
+                            {h.at ? formatIso(h.at) : "—"}
+                            {h.remark ? ` · ${h.remark}` : ""}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-ink-600/45 py-5 text-center">
+                    No activity history yet.
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// pages/ScanCenterPage.jsx
+// ------------------------------------------------------------
+// Central operator scan flow:
+// Scan TK -> identify the shared package record -> review current status
+// -> confirm the next explicit scan action -> write status/history.
+// This page deliberately never changes a TK just because a container arrived.
+// A TK changes here only after the operator scans and confirms that TK.
+function ScanCenterPage() {
+  const { user } = useAuth();
+  const { packages, findPackage, getHistory, syncTimelineToStatus, ready } =
+    usePackageTracking();
+  const [value, setValue] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const [phase, setPhase] = useState("idle");
+  const inputRef = useRef(null);
+  const timerRef = useRef(null);
+
+  const canScan = hasPermission(user, "tk.scan");
+  const canProcess =
+    hasPermission(user, "tk.process") || hasPermission(user, "tk.scan");
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    return () => clearTimeout(timerRef.current);
+  }, []);
+
+  const stageIndex = (status) => PACKAGE_STAGES.indexOf(status);
+  const nextStageFor = (pkg) => {
+    if (!pkg) return null;
+    const current = pkg.status || "Inbound Origin";
+    const idx = stageIndex(current);
+    if (idx < 0 || idx >= PACKAGE_STAGES.length - 1) return null;
+    return PACKAGE_STAGES[idx + 1];
+  };
+
+  const actionMeta = (pkg) => {
+    if (!pkg) return null;
+    const next = nextStageFor(pkg);
+    if (!next) return { label: "Completed", tone: "done", disabled: true };
+    if (pkg.status === "Inbound Origin") {
+      const containerNo = pkg.container_no || pkg.container || "";
+      if (!containerNo) {
+        return {
+          label: "Outbound Origin",
+          tone: "blocked",
+          disabled: true,
+          note: "Container Number is required before this TK can leave Inbound Origin.",
+        };
+      }
+    }
+    if (VERIFY_GATED_STAGES[pkg.status]) {
+      return {
+        label: next,
+        tone: "waiting",
+        disabled: true,
+        note: VERIFY_GATED_STAGES[pkg.status].note,
+      };
+    }
+    return { label: next, tone: "ready", disabled: false };
+  };
+
+  function lookup(raw) {
+    const tk = String(raw || "").trim();
+    if (!tk) return;
+    clearTimeout(timerRef.current);
+    setPhase("scanning");
+    const pkg = findPackage(tk);
+    if (!pkg) {
+      setSelected(null);
+      setNotice({ type: "error", text: `TK "${tk}" was not found.` });
+      setPhase("error");
+      setValue("");
+      inputRef.current?.focus();
+      return;
+    }
+    setSelected(pkg);
+    setValue("");
+    setNotice(null);
+    setPhase("success");
+    inputRef.current?.focus();
+  }
+
+  function onInput(e) {
+    const v = e.target.value;
+    setValue(v);
+    if (!v.trim()) {
+      setPhase("idle");
+      return;
+    }
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => lookup(v), 300);
+  }
+
+  async function confirmNext() {
+    if (!selected || confirming || !canProcess) return;
+    const meta = actionMeta(selected);
+    if (!meta || meta.disabled) return;
+    const next = meta.label;
+    setConfirming(true);
+    try {
+      await syncTimelineToStatus(
+        selected.tk,
+        next,
+        user?.name || "Operator",
+        `Scan Center confirmation: ${selected.tk}`,
+      );
+      const updated = findPackage(selected.tk) || { ...selected, status: next };
+      setSelected(updated);
+      setNotice({
+        type: "success",
+        text: `${selected.tk} verified and moved to ${next}.`,
+      });
+    } catch (err) {
+      setNotice({
+        type: "error",
+        text: err?.message || "The scan could not be confirmed.",
+      });
+    } finally {
+      setConfirming(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  const history = selected
+    ? [...getHistory(selected.tk)].reverse().slice(0, 8)
+    : [];
+  const meta = actionMeta(selected);
+  const customerText = selected?.customer || selected?.customer_name || "—";
+  const orderText =
+    selected?.order_no || selected?.order || selected?.orderNo || "—";
+  const containerText = selected?.container_no || selected?.container || "—";
+  const branchText =
+    selected?.branch ||
+    selected?.receiving_branch ||
+    selected?.receivingBranch ||
+    "—";
+  const weightText =
+    selected?.weight_kg != null
+      ? `${selected.weight_kg} kg`
+      : selected?.weight
+        ? `${selected.weight} kg`
+        : "—";
+  const cbmText = selected?.cbm != null ? selected.cbm : "—";
+
+  const statusClass = {
+    ready: "bg-signal-blue/10 text-signal-blue",
+    blocked: "bg-amber-50 text-amber-700",
+    waiting: "bg-amber-50 text-amber-700",
+    done: "bg-signal-teal/10 text-signal-teal",
+  }[meta?.tone || "ready"];
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <div className="flex items-center gap-2">
+          <div className="w-9 h-9 rounded-lg bg-signal-blue/10 text-signal-blue flex items-center justify-center">
+            <ScanLine size={19} />
+          </div>
+          <div>
+            <h1 className="font-display font-bold text-xl text-ink-900">
+              Scan Center
+            </h1>
+            <p className="text-sm text-ink-600/55">
+              Scan a TK, verify the package, and record the next confirmed
+              movement.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {notice && (
+        <div
+          className={`flex items-center gap-2 rounded-md border px-4 py-3 text-sm ${notice.type === "success" ? "bg-signal-teal/10 border-signal-teal/25 text-signal-teal" : "bg-signal-red/10 border-signal-red/25 text-signal-red"}`}
+        >
+          {notice.type === "success" ? (
+            <Check size={15} />
+          ) : (
+            <TriangleAlert size={15} />
+          )}
+          <span>{notice.text}</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-5 items-start">
+        <div className="space-y-5">
+          <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-ink-900">
+                  Scan Tracking Number
+                </h2>
+                <p className="text-xs text-ink-600/50 mt-0.5">
+                  Use a barcode scanner or type a TK manually.
+                </p>
+              </div>
+              <span
+                className={`text-[11px] font-semibold px-2 py-1 rounded-full ${phase === "success" ? "bg-signal-teal/10 text-signal-teal" : phase === "error" ? "bg-signal-red/10 text-signal-red" : "bg-mist-100 text-ink-600/55"}`}
+              >
+                {phase === "success"
+                  ? "Verified"
+                  : phase === "error"
+                    ? "Not Found"
+                    : "Ready to scan"}
+              </span>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                lookup(value);
+              }}
+            >
+              <div className="flex items-center gap-3 border-2 border-mist-200 rounded-lg px-4 py-3.5 focus-within:border-signal-blue focus-within:ring-4 focus-within:ring-signal-blue/5">
+                <ScanLine size={20} className="text-signal-blue shrink-0" />
+                <input
+                  ref={inputRef}
+                  autoFocus
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={value}
+                  onChange={onInput}
+                  disabled={!canScan || !ready}
+                  placeholder="Scan or enter TK number…"
+                  className="flex-1 min-w-0 outline-none text-base font-medium bg-transparent placeholder:font-normal placeholder:text-ink-600/35"
+                />
+                <button
+                  type="submit"
+                  disabled={!value.trim() || !canScan || !ready}
+                  className="shrink-0 inline-flex items-center gap-1.5 bg-signal-blue text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-40"
+                >
+                  <Search size={15} /> Verify
+                </button>
+              </div>
+            </form>
+            {!canScan && (
+              <p className="text-xs text-signal-red mt-2">
+                You do not have permission to scan TKs.
+              </p>
+            )}
+          </div>
+
+          <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+            <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-ink-900">
+                  Package Information
+                </h2>
+                <p className="text-xs text-ink-600/50 mt-0.5">
+                  The package record is identified by TK — no customer phone
+                  entry is required.
+                </p>
+              </div>
+              {selected && (
+                <span className="text-xs font-mono font-semibold text-ink-700 bg-mist-100 px-2 py-1 rounded">
+                  {selected.tk}
+                </span>
+              )}
+            </div>
+            {!selected ? (
+              <div className="px-5 py-14 text-center text-ink-600/40">
+                <Package size={28} className="mx-auto mb-2 opacity-50" />
+                <p className="text-sm font-medium">
+                  Scan a TK to load package details
+                </p>
+              </div>
+            ) : (
+              <div className="p-5 space-y-5">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    ["Customer", customerText],
+                    ["Order", orderText],
+                    ["Container", containerText],
+                    ["Receiving Branch", branchText],
+                  ].map(([k, v]) => (
+                    <div
+                      key={k}
+                      className="rounded-lg bg-mist-50 border border-mist-200 p-3"
+                    >
+                      <div className="text-[11px] uppercase tracking-wide font-semibold text-ink-600/45">
+                        {k}
+                      </div>
+                      <div
+                        className="text-sm font-semibold text-ink-900 mt-1 truncate"
+                        title={String(v)}
+                      >
+                        {v}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-3 border-t border-mist-200 pt-4">
+                  <span className="text-xs font-semibold text-ink-600/50 uppercase tracking-wide">
+                    Current Status
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-signal-blue/10 text-signal-blue text-xs font-semibold">
+                    <Circle size={8} fill="currentColor" />{" "}
+                    {selected.status || "Unknown"}
+                  </span>
+                  <span className="text-xs text-ink-600/45">
+                    Weight: {weightText} · CBM: {cbmText}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {selected && (
+            <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-ink-900">
+                    Recent Activity
+                  </h2>
+                  <p className="text-xs text-ink-600/50 mt-0.5">
+                    Latest status events recorded for this TK.
+                  </p>
+                </div>
+                <History size={17} className="text-ink-600/35" />
+              </div>
+              {history.length ? (
+                <div className="divide-y divide-mist-200">
+                  {history.map((h, i) => (
+                    <div
+                      key={`${h.at}-${i}`}
+                      className="py-3 flex items-start gap-3"
+                    >
+                      <div className="w-7 h-7 rounded-full bg-mist-100 flex items-center justify-center shrink-0">
+                        <Check size={13} className="text-signal-teal" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-ink-900">
+                            {h.status}
+                          </span>
+                          <span className="text-xs text-ink-600/40">
+                            {h.user || "System"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-ink-600/45 mt-0.5">
+                          {h.at ? formatIso(h.at) : "—"}
+                          {h.remark ? ` · ${h.remark}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-ink-600/45 py-5 text-center">
+                  No activity history yet.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden xl:sticky xl:top-5">
+          <div className="px-5 py-4 border-b border-mist-200">
+            <h2 className="text-sm font-semibold text-ink-900">Next Action</h2>
+            <p className="text-xs text-ink-600/50 mt-0.5">
+              Confirm only after the physical TK scan is verified.
+            </p>
+          </div>
+          <div className="p-5">
+            {!selected ? (
+              <div className="py-10 text-center">
+                <ScanLine size={30} className="mx-auto text-ink-600/20 mb-3" />
+                <p className="text-sm font-medium text-ink-600/55">
+                  Waiting for TK scan
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className={`rounded-lg px-4 py-4 ${statusClass}`}>
+                  <div className="text-[11px] uppercase tracking-wide font-semibold opacity-70">
+                    Next Available Action
+                  </div>
+                  <div className="text-lg font-bold mt-1">
+                    {meta?.label || "—"}
+                  </div>
+                  {meta?.note && (
+                    <p className="text-xs mt-2 leading-5 opacity-80">
+                      {meta.note}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-ink-600/50">TK</span>
+                    <span className="font-semibold text-ink-900">
+                      {selected.tk}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-ink-600/50">Current</span>
+                    <span className="font-semibold text-ink-900">
+                      {selected.status || "—"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-ink-600/50">Next</span>
+                    <span className="font-semibold text-ink-900">
+                      {meta?.label || "—"}
+                    </span>
+                  </div>
+                </div>
+                {meta?.tone === "blocked" &&
+                selected.status === "Inbound Origin" ? (
+                  <Link
+                    to={`/outbound-origin?tk=${encodeURIComponent(selected.tk)}`}
+                    className="w-full inline-flex justify-center items-center gap-2 border border-mist-200 text-ink-800 text-sm font-semibold px-4 py-2.5 rounded-md hover:bg-mist-50"
+                  >
+                    <ArrowRight size={15} /> Open Outbound Origin
+                  </Link>
+                ) : (
+                  <button
+                    onClick={confirmNext}
+                    disabled={meta?.disabled || confirming || !canProcess}
+                    className="w-full inline-flex justify-center items-center gap-2 bg-signal-blue text-white text-sm font-semibold px-4 py-2.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-40"
+                  >
+                    {confirming ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Check size={16} />
+                    )}
+                    {confirming ? "Confirming…" : "Confirm Scan"}
+                  </button>
+                )}
+                {!canProcess && (
+                  <p className="text-xs text-ink-600/45 text-center">
+                    View only — your role cannot confirm this scan.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
 // pages/Placeholder.jsx
 // ------------------------------------------------------------
 function Placeholder({ title }) {
@@ -21105,6 +21904,8 @@ function AdminApp() {
           <Route path="/containers" element={<ContainersPage />} />
           <Route path="/containers/:id" element={<ContainerDetail />} />
           <Route path="/shipment-lookup" element={<ShipmentLookup />} />
+          <Route path="/scan-center" element={<ScanCenterPage />} />
+          <Route path="/process-tracking" element={<ProcessTrackingPage />} />
           <Route path="/wh-arrived" element={<WHArrivedPage />} />
           <Route path="/sorting" element={<SortingPage />} />
           <Route path="/warehouses" element={<WarehouseManagementPage />} />
@@ -21117,6 +21918,7 @@ function AdminApp() {
           {OTHER_ROUTES.filter(
             (item) =>
               ![
+                "/process-tracking",
                 "/wh-arrived",
                 "/sorting",
                 "/warehouses",
