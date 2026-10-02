@@ -17,6 +17,7 @@ import React, {
   useRef,
   createContext,
   useContext,
+  useMemo,
 } from "react";
 import {
   Link,
@@ -861,6 +862,11 @@ const NAV_SECTIONS = [
     label: "Exceptions & Reports",
     items: [
       { label: "Exceptions", icon: "TriangleAlert", path: "/exceptions" },
+      {
+        label: "Reports & Analytics",
+        icon: "BarChart3",
+        path: "/reports",
+      },
     ],
   },
   {
@@ -1041,6 +1047,7 @@ const PERMISSION_GROUPS = [
     perms: [
       ["exception.view", "View Exceptions"],
       ["audit.view", "View Audit Logs"],
+      ["report.view", "View Reports"],
     ],
   },
   {
@@ -1095,6 +1102,14 @@ const PATH_VIEW = {
   "/permissions": "role.view",
   "/status-master": "status_master.view",
   "/audit-logs": "audit.view",
+  "/reports": "report.view",
+  "/reports/shipment": "report.view",
+  "/reports/transit": "report.view",
+  "/reports/late": "report.view",
+  "/reports/warehouse": "report.view",
+  "/reports/transport": "report.view",
+  "/reports/container": "report.view",
+  "/reports/sla": "report.view",
 };
 
 // Generic list pages: which permission creates / edits / deletes a row.
@@ -1791,7 +1806,9 @@ const MODULES = {
       },
     ],
     columns: [
-      col("id", "Customer ID", { strong: true }),
+      col("id", "Customer ID", {
+        linkTo: (row) => `/customers/${encodeURIComponent(row.id)}`,
+      }),
       col("name", "Name"),
       col("email", "Email"),
       col("phone", "Phone"),
@@ -9453,6 +9470,8 @@ function Topbar({ title, onMenuClick }) {
   const [showAccount, setShowAccount] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const menuRef = useRef(null);
+  const { items: slaBellItems } = useSlaNotifications({ limit: 500 });
+  const slaUnread = slaBellItems.filter((n) => !n.read_at).length;
 
   // Global "TK, Order, Container" search — sends the query to Shipment
   // Lookup, which does the actual matching (TK, Customer ID, Order ID,
@@ -9521,7 +9540,11 @@ function Topbar({ title, onMenuClick }) {
         className="relative p-2 rounded-sm hover:bg-mist-100 text-ink-700"
       >
         <Bell size={19} />
-        <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-signal-red" />
+        {slaUnread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-signal-red text-white text-[10px] font-bold grid place-items-center">
+            {slaUnread > 99 ? "99+" : slaUnread}
+          </span>
+        )}
       </button>
 
       <div className="relative" ref={menuRef}>
@@ -9615,6 +9638,7 @@ function Topbar({ title, onMenuClick }) {
 // ------------------------------------------------------------
 function useCurrentTitle() {
   const { pathname } = useLocation();
+  if (pathname === "/notifications") return "Notifications";
   for (const section of NAV_SECTIONS) {
     for (const item of section.items) {
       if (item.path === pathname) return item.label;
@@ -9631,6 +9655,7 @@ function Layout() {
     <div className="cb-app h-screen flex bg-[#f4f7fb]">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
+        <SlaNotificationSync />
         <Topbar title={title} onMenuClick={() => setSidebarOpen(true)} />
         <main className="flex-1 overflow-y-auto p-4 lg:p-6 xl:p-7">
           <Outlet />
@@ -13260,6 +13285,8 @@ function Dashboard() {
         />
       )}
 
+      <SlaDashboardSection />
+
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 bg-white border border-mist-200 rounded-md shadow-panel">
           <div className="flex items-center justify-between px-4 lg:px-5 py-3.5 border-b border-mist-200">
@@ -15627,6 +15654,8 @@ function PackageDetail() {
               })}
             </ol>
           </div>
+
+          <SlaPackageCard pkg={data} tk={tk} />
 
           <StatusHistoryCard pkg={data} timeline={timeline} />
 
@@ -24626,8 +24655,2168 @@ function GlobalToastHost() {
 // ListPage (filter bar + table). Anything without a config yet falls
 // back to a placeholder, so a newly added nav item never breaks routing.
 const OTHER_ROUTES = NAV_SECTIONS.flatMap((s) => s.items).filter(
-  (item) => item.path !== "/",
+  (item) => item.path !== "/" && !item.path.startsWith("/reports"),
 );
+
+// ============================================================
+// SLA MODULE — Phase 1
+// Configurable Transport SLA + Warehouse Update SLA, change log,
+// and the pure calculation engine used by Dashboard / Reports /
+// Shipment Detail in later phases.
+//
+// NOTHING below hard-codes business days. SLA_DEFAULT_* are only
+// seed values for "Reset to Default"; the engine always receives
+// the live rules as arguments.
+// ============================================================
+const SLA_TRANSPORT_KEY = "cargo_bridge_sla_transport_v1";
+const SLA_WAREHOUSE_KEY = "cargo_bridge_sla_warehouse_v1";
+const SLA_LOG_KEY = "cargo_bridge_sla_log_v1";
+const SLA_DAY_MS = 86400000;
+
+const SLA_STATUS = {
+  ON_TIME: "On Time",
+  WARNING: "Warning",
+  LATE: "Late",
+  NO_UPDATE: "No Update",
+  COMPLETED: "Completed",
+};
+
+const SLA_DEFAULT_TRANSPORT = [
+  {
+    id: "land",
+    sortOrder: 1,
+    mode: "Land",
+    expectedDays: 10,
+    warningDays: 9,
+    lateDays: 12,
+    active: true,
+  },
+  {
+    id: "sea",
+    sortOrder: 2,
+    mode: "Sea",
+    expectedDays: 25,
+    warningDays: 23,
+    lateDays: 30,
+    active: true,
+  },
+  {
+    id: "air",
+    sortOrder: 3,
+    mode: "Air",
+    expectedDays: 3,
+    warningDays: 3,
+    lateDays: 5,
+    active: true,
+  },
+];
+const SLA_DEFAULT_WAREHOUSE = [
+  {
+    id: "china",
+    sortOrder: 1,
+    location: "China Warehouse",
+    allowedDays: 2,
+    warningDays: 1,
+    lateDays: 2,
+    active: true,
+  },
+  {
+    id: "cambodia",
+    sortOrder: 2,
+    location: "Cambodia Warehouse",
+    allowedDays: 1,
+    warningDays: 1,
+    lateDays: 2,
+    active: true,
+  },
+];
+
+// ---------------- Calculation engine (pure functions) ----------------
+function slaDaysBetween(from, to) {
+  const s = new Date(from).getTime();
+  const e = new Date(to).getTime();
+  if (Number.isNaN(s) || Number.isNaN(e)) return null;
+  return Math.max(0, Math.floor((e - s) / SLA_DAY_MS));
+}
+
+// Transit SLA — clock starts at departure (outboundAt) and stops at arrival.
+// Day 0..warning-1 = On Time, warning..late = Warning, > late = Late.
+function evaluateTransitSla(shipment, transportRules, now = new Date()) {
+  const mode = String(shipment?.mode || "").toLowerCase();
+  const rule = (transportRules || []).find(
+    (r) => r.active && String(r.mode).toLowerCase() === mode,
+  );
+  if (!rule || !shipment?.outboundAt) return null; // no rule / no timestamp → not evaluated
+  const end = shipment.arrivedAt || shipment.completedAt || now;
+  const elapsed = slaDaysBetween(shipment.outboundAt, end);
+  if (elapsed === null) return null;
+  const status =
+    elapsed > rule.lateDays
+      ? SLA_STATUS.LATE
+      : elapsed >= rule.warningDays
+        ? SLA_STATUS.WARNING
+        : SLA_STATUS.ON_TIME;
+  return {
+    status,
+    mode: rule.mode,
+    startedAt: shipment.outboundAt,
+    finished: !!(shipment.arrivedAt || shipment.completedAt),
+    expectedDays: rule.expectedDays,
+    elapsedDays: elapsed,
+    delayDays: Math.max(0, elapsed - rule.expectedDays),
+  };
+}
+
+// Warehouse update SLA — measures days since the last update inside the
+// window where that warehouse is responsible for the shipment.
+//   China    : receivedAt  → until outboundAt
+//   Cambodia : warehouseReceivedAt (falls back to arrivedAt) → until completedAt
+function evaluateWarehouseSla(shipment, warehouseRules, now = new Date()) {
+  if (!shipment || shipment.completedAt) return null;
+  let key = null;
+  let start = null;
+  if (shipment.warehouseReceivedAt || shipment.arrivedAt) {
+    key = "cambodia";
+    start = shipment.warehouseReceivedAt || shipment.arrivedAt;
+  } else if (shipment.receivedAt && !shipment.outboundAt) {
+    key = "china";
+    start = shipment.receivedAt;
+  }
+  if (!key) return null;
+  const rule = (warehouseRules || []).find((r) => r.id === key && r.active);
+  if (!rule) return null;
+  const last =
+    shipment.lastUpdatedAt &&
+    new Date(shipment.lastUpdatedAt) >= new Date(start)
+      ? shipment.lastUpdatedAt
+      : start;
+  const days = slaDaysBetween(last, now);
+  if (days === null) return null;
+  const status =
+    days > rule.allowedDays
+      ? SLA_STATUS.NO_UPDATE
+      : days >= rule.warningDays
+        ? SLA_STATUS.WARNING
+        : SLA_STATUS.ON_TIME;
+  return {
+    status,
+    warehouse: rule.location,
+    receivedAt: start,
+    lastUpdatedAt: last,
+    daysWithoutUpdate: days,
+    allowedDays: rule.allowedDays,
+    delayDays: Math.max(0, days - rule.allowedDays),
+    escalated: days > rule.lateDays,
+  };
+}
+
+// Overall result. Transit delay and warehouse silence stay separate:
+// "No Update" never becomes "Late" while the shipment is inside its SLA.
+// Priority: Completed > Late > No Update > Warning > On Time.
+function evaluateShipmentSla(
+  shipment,
+  transportRules,
+  warehouseRules,
+  now = new Date(),
+) {
+  const transit = evaluateTransitSla(shipment, transportRules, now);
+  const warehouse = evaluateWarehouseSla(shipment, warehouseRules, now);
+  let overall = SLA_STATUS.ON_TIME;
+  if (shipment?.completedAt) overall = SLA_STATUS.COMPLETED;
+  else if (transit?.status === SLA_STATUS.LATE) overall = SLA_STATUS.LATE;
+  else if (warehouse?.status === SLA_STATUS.NO_UPDATE)
+    overall = SLA_STATUS.NO_UPDATE;
+  else if (
+    transit?.status === SLA_STATUS.WARNING ||
+    warehouse?.status === SLA_STATUS.WARNING
+  )
+    overall = SLA_STATUS.WARNING;
+  return {
+    overall,
+    transit,
+    warehouse,
+    completedLate:
+      !!shipment?.completedAt && transit?.status === SLA_STATUS.LATE,
+  };
+}
+
+// ---------------- Rule config (drives the generic settings panel) ----------------
+const SLA_KINDS = {
+  transport: {
+    table: "sla_transport_rules",
+    lsKey: SLA_TRANSPORT_KEY,
+    defaults: SLA_DEFAULT_TRANSPORT,
+    title: "Transport SLA",
+    subtitle:
+      "Expected transit time and warning / late thresholds per transport mode.",
+    nameField: "mode",
+    nameCol: "mode",
+    nameLabel: "Transport",
+    fields: [
+      ["expectedDays", "Expected Transit Days", "expected_days"],
+      ["warningDays", "Warning Threshold", "warning_days"],
+      ["lateDays", "Late Threshold", "late_days"],
+    ],
+    settingLabel: (r) => `${r.mode} Transit SLA`,
+    validate(r, all) {
+      const [e, w, l] = [r.expectedDays, r.warningDays, r.lateDays].map(Number);
+      if (!String(r.mode || "").trim()) return "Transport name is required.";
+      if ([e, w, l].some((n) => !Number.isInteger(n) || n < 1))
+        return "All day values must be whole numbers of at least 1.";
+      if (w > e)
+        return "Warning threshold cannot be greater than expected transit days.";
+      if (e > l)
+        return "Late threshold cannot be less than expected transit days.";
+      if (
+        all.some(
+          (x) =>
+            x.id !== r.id &&
+            String(x.mode).toLowerCase() ===
+              String(r.mode).trim().toLowerCase(),
+        )
+      )
+        return "This transport mode already exists.";
+      return "";
+    },
+  },
+  warehouse: {
+    table: "sla_warehouse_rules",
+    lsKey: SLA_WAREHOUSE_KEY,
+    defaults: SLA_DEFAULT_WAREHOUSE,
+    title: "Warehouse Update SLA",
+    subtitle: "How many days a warehouse may go without updating a shipment.",
+    nameField: "location",
+    nameCol: "location",
+    nameLabel: "Location",
+    fields: [
+      ["allowedDays", "Allowed Update Days", "allowed_days"],
+      ["warningDays", "Warning Days", "warning_days"],
+      ["lateDays", "Late Days", "late_days"],
+    ],
+    settingLabel: (r) => `${r.location} Update SLA`,
+    validate(r, all) {
+      const [a, w, l] = [r.allowedDays, r.warningDays, r.lateDays].map(Number);
+      if (!String(r.location || "").trim()) return "Location name is required.";
+      if ([a, w, l].some((n) => !Number.isInteger(n) || n < 1))
+        return "All day values must be whole numbers of at least 1.";
+      if (w > a)
+        return "Warning days cannot be greater than allowed update days.";
+      if (l < a) return "Late days cannot be less than allowed update days.";
+      if (
+        all.some(
+          (x) =>
+            x.id !== r.id &&
+            String(x.location).toLowerCase() ===
+              String(r.location).trim().toLowerCase(),
+        )
+      )
+        return "This location already exists.";
+      return "";
+    },
+  },
+};
+
+function slaFromRow(cfg, row) {
+  const r = {
+    id: row.id,
+    sortOrder: row.sort_order || 0,
+    active: !!row.active,
+    [cfg.nameField]: row[cfg.nameCol],
+  };
+  cfg.fields.forEach(([k, , col]) => (r[k] = Number(row[col])));
+  return r;
+}
+function slaToRow(cfg, r, userId) {
+  const row = {
+    id: r.id,
+    sort_order: r.sortOrder || 0,
+    active: !!r.active,
+    [cfg.nameCol]: String(r[cfg.nameField]).trim(),
+    updated_at: new Date().toISOString(),
+    updated_by: userId || null,
+  };
+  cfg.fields.forEach(([k, , col]) => (row[col] = Number(r[k])));
+  return row;
+}
+
+function slaDiff(cfg, prev, next) {
+  const name = cfg.settingLabel(next);
+  if (!prev)
+    return [
+      {
+        setting: name,
+        previous: "—",
+        next: `Created (${cfg.fields.map(([k, l]) => `${l}: ${next[k]}`).join(", ")})`,
+      },
+    ];
+  const out = [];
+  cfg.fields.forEach(([k, label]) => {
+    if (Number(prev[k]) !== Number(next[k]))
+      out.push({
+        setting: `${name} — ${label}`,
+        previous: `${prev[k]} days`,
+        next: `${next[k]} days`,
+      });
+  });
+  if (!!prev.active !== !!next.active)
+    out.push({
+      setting: `${name} — Status`,
+      previous: prev.active ? "Active" : "Inactive",
+      next: next.active ? "Active" : "Inactive",
+    });
+  return out;
+}
+
+async function slaLoadRules(cfg) {
+  if (!supabase)
+    return lsRead(cfg.lsKey, null) || cfg.defaults.map((d) => ({ ...d }));
+  const { data, error } = await supabase
+    .from(cfg.table)
+    .select("*")
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+  return data && data.length
+    ? data.map((r) => slaFromRow(cfg, r))
+    : cfg.defaults.map((d) => ({ ...d }));
+}
+
+async function slaPersist(cfg, nextRules, changedRules, changes, user) {
+  const by = user?.id || null;
+  const byName = user?.full_name || user?.name || user?.email || "Admin";
+  if (supabase) {
+    const { error } = await supabase.from(cfg.table).upsert(
+      changedRules.map((r) => slaToRow(cfg, r, by)),
+      { onConflict: "id" },
+    );
+    if (error) throw error;
+    if (changes.length) {
+      const { error: logErr } = await supabase.from("sla_change_log").insert(
+        changes.map((c) => ({
+          setting: c.setting,
+          previous_value: c.previous,
+          new_value: c.next,
+          changed_by: by,
+          changed_by_name: byName,
+        })),
+      );
+      if (logErr) throw logErr;
+    }
+  } else {
+    lsWrite(cfg.lsKey, nextRules);
+    const log = lsRead(SLA_LOG_KEY, []);
+    const now = new Date().toISOString();
+    lsWrite(
+      SLA_LOG_KEY,
+      [
+        ...changes.map((c) => ({
+          setting: c.setting,
+          previous_value: c.previous,
+          new_value: c.next,
+          changed_by_name: byName,
+          changed_at: now,
+        })),
+        ...log,
+      ].slice(0, 500),
+    );
+  }
+  window.dispatchEvent(new CustomEvent("cargo-bridge-sla-updated"));
+}
+
+// Reusable hook for later phases (Dashboard / Reports / Detail).
+function useSlaRules() {
+  const [state, setState] = useState({
+    transport: [],
+    warehouse: [],
+    loading: true,
+  });
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      Promise.all([
+        slaLoadRules(SLA_KINDS.transport),
+        slaLoadRules(SLA_KINDS.warehouse),
+      ])
+        .then(
+          ([transport, warehouse]) =>
+            alive && setState({ transport, warehouse, loading: false }),
+        )
+        .catch(() => alive && setState((s) => ({ ...s, loading: false })));
+    load();
+    window.addEventListener("cargo-bridge-sla-updated", load);
+    return () => {
+      alive = false;
+      window.removeEventListener("cargo-bridge-sla-updated", load);
+    };
+  }, []);
+  return state;
+}
+
+function slaFmtDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return ["—", "—"];
+  const p = (n) => String(n).padStart(2, "0");
+  return [
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+    `${p(d.getHours())}:${p(d.getMinutes())}`,
+  ];
+}
+
+// ---------------- UI ----------------
+function SlaConfirmModal({ title, changes, note, busy, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-slate-200">
+        <div className="flex items-start gap-3 p-5 border-b border-slate-100">
+          <div className="h-10 w-10 rounded-xl bg-amber-50 text-amber-600 grid place-items-center shrink-0">
+            <Icons.TriangleAlert size={20} />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-900">{title}</h3>
+            <p className="text-sm text-slate-500 mt-1">
+              {note ||
+                "This changes how shipments are evaluated from now on. Past SLA results are not rewritten."}
+            </p>
+          </div>
+        </div>
+        <div className="p-5 max-h-64 overflow-auto space-y-2">
+          {changes.length === 0 && (
+            <p className="text-sm text-slate-500">No changes detected.</p>
+          )}
+          {changes.map((c, i) => (
+            <div
+              key={i}
+              className="rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 text-sm"
+            >
+              <div className="font-semibold text-slate-800">{c.setting}</div>
+              <div className="text-slate-600 mt-0.5">
+                {c.previous} <span className="mx-1 text-slate-400">→</span>
+                <span className="font-semibold text-blue-700">{c.next}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end gap-3 px-5 py-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy || changes.length === 0}
+            className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {busy ? "Saving..." : "Confirm & Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SlaRulesPanel({ kind, notify }) {
+  const cfg = SLA_KINDS[kind];
+  const { user } = useAuth();
+  const [rules, setRules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(null); // {rule, isNew}
+  const [formErr, setFormErr] = useState("");
+  const [pending, setPending] = useState(null); // {title, nextRules, changedRules, changes, note}
+
+  const reload = async () => {
+    try {
+      setLoading(true);
+      setRules(await slaLoadRules(cfg));
+    } catch (e) {
+      notify(
+        "SLA load failed",
+        e?.message || "Run the SLA SQL migration in Supabase.",
+        "err",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+
+  const inputCls =
+    "mt-1.5 w-full h-11 rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+
+  const stage = (rule, isNew) => {
+    const err = cfg.validate(rule, rules);
+    if (err) {
+      setFormErr(err);
+      if (!editing) notify("Invalid SLA rule", err, "err");
+      return;
+    }
+    const prev = isNew ? null : rules.find((r) => r.id === rule.id);
+    const changes = slaDiff(cfg, prev, rule);
+    if (!changes.length) {
+      setEditing(null);
+      return notify("No changes", "Nothing was modified.", "warn");
+    }
+    const nextRules = isNew
+      ? [...rules, rule]
+      : rules.map((r) => (r.id === rule.id ? rule : r));
+    setEditing(null);
+    setPending({
+      title: isNew
+        ? `Add ${cfg.nameLabel} rule?`
+        : `Change ${cfg.settingLabel(rule)}?`,
+      nextRules,
+      changedRules: [rule],
+      changes,
+    });
+  };
+
+  const toggle = (r) => stage({ ...r, active: !r.active }, false);
+
+  const resetDefaults = () => {
+    const changedRules = [];
+    const changes = [];
+    const nextRules = rules.map((r) => {
+      const d = cfg.defaults.find((x) => x.id === r.id);
+      if (!d) return r;
+      const diff = slaDiff(cfg, r, d);
+      if (diff.length) {
+        changedRules.push({ ...d });
+        changes.push(...diff);
+        return { ...d };
+      }
+      return r;
+    });
+    cfg.defaults.forEach((d) => {
+      if (!rules.some((r) => r.id === d.id)) {
+        changedRules.push({ ...d });
+        changes.push(...slaDiff(cfg, null, d));
+        nextRules.push({ ...d });
+      }
+    });
+    if (!changes.length)
+      return notify(
+        "Already default",
+        "All rules already match the defaults.",
+        "warn",
+      );
+    setPending({
+      title: "Reset to default values?",
+      note: "Default rules are restored. Custom rules you added are kept as they are.",
+      nextRules,
+      changedRules,
+      changes,
+    });
+  };
+
+  const confirm = async () => {
+    try {
+      setBusy(true);
+      await slaPersist(
+        cfg,
+        pending.nextRules,
+        pending.changedRules,
+        pending.changes,
+        user,
+      );
+      setRules(pending.nextRules);
+      setPending(null);
+      notify(
+        "SLA updated",
+        `${cfg.title} saved and recorded in the change log.`,
+      );
+    } catch (e) {
+      notify("Save failed", e?.message || "Unable to save SLA rule.", "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openAdd = () => {
+    setFormErr("");
+    const blank = {
+      id: `custom-${Date.now()}`,
+      sortOrder: rules.length + 1,
+      active: true,
+      [cfg.nameField]: "",
+    };
+    cfg.fields.forEach(([k]) => (blank[k] = ""));
+    setEditing({ rule: blank, isNew: true });
+  };
+
+  return (
+    <>
+      <div className="p-6 border-b border-slate-100 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">{cfg.title}</h2>
+          <p className="text-sm text-slate-500 mt-1">{cfg.subtitle}</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Icons.RotateCcw size={15} /> Reset to Default
+          </button>
+          <button
+            type="button"
+            onClick={openAdd}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            <Icons.Plus size={15} /> Add
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+              <th className="px-6 py-3">{cfg.nameLabel}</th>
+              {cfg.fields.map(([k, label]) => (
+                <th key={k} className="px-4 py-3">
+                  {label}
+                </th>
+              ))}
+              <th className="px-4 py-3">Status</th>
+              <th className="px-6 py-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading && (
+              <tr>
+                <td
+                  colSpan={cfg.fields.length + 3}
+                  className="px-6 py-8 text-center text-slate-400"
+                >
+                  Loading...
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              rules.map((r) => (
+                <tr key={r.id} className="hover:bg-slate-50/60">
+                  <td className="px-6 py-3.5 font-semibold text-slate-900">
+                    {r[cfg.nameField]}
+                  </td>
+                  {cfg.fields.map(([k]) => (
+                    <td key={k} className="px-4 py-3.5 text-slate-700">
+                      {r[k]} {Number(r[k]) === 1 ? "day" : "days"}
+                    </td>
+                  ))}
+                  <td className="px-4 py-3.5">
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${r.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
+                    >
+                      {r.active ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="px-6 py-3.5 text-right whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => toggle(r)}
+                      className="mr-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      {r.active ? "Disable" : "Enable"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormErr("");
+                        setEditing({ rule: { ...r }, isNew: false });
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
+                    >
+                      <Icons.Pencil size={13} /> Edit
+                    </button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="px-6 py-4 text-xs text-slate-500 border-t border-slate-100">
+        Changes apply to future evaluations. Every change is recorded in the SLA
+        Change Log.
+      </p>
+
+      {editing && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900">
+                {editing.isNew
+                  ? `Add ${cfg.nameLabel}`
+                  : `Edit ${editing.rule[cfg.nameField]}`}
+              </h3>
+              <button type="button" onClick={() => setEditing(null)}>
+                <Icons.X size={18} className="text-slate-400" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <label className="block text-sm font-semibold text-slate-700">
+                {cfg.nameLabel}
+                <input
+                  className={inputCls}
+                  value={editing.rule[cfg.nameField]}
+                  disabled={
+                    !editing.isNew &&
+                    SLA_KINDS[kind].defaults.some(
+                      (d) => d.id === editing.rule.id,
+                    )
+                  }
+                  onChange={(e) =>
+                    setEditing((s) => ({
+                      ...s,
+                      rule: { ...s.rule, [cfg.nameField]: e.target.value },
+                    }))
+                  }
+                />
+              </label>
+              {cfg.fields.map(([k, label]) => (
+                <label
+                  key={k}
+                  className="block text-sm font-semibold text-slate-700"
+                >
+                  {label}{" "}
+                  <span className="font-normal text-slate-400">(days)</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    className={inputCls}
+                    value={editing.rule[k]}
+                    onChange={(e) =>
+                      setEditing((s) => ({
+                        ...s,
+                        rule: { ...s.rule, [k]: e.target.value },
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+              <label className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3 cursor-pointer">
+                <span className="text-sm font-semibold text-slate-800">
+                  Active
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 accent-blue-600"
+                  checked={!!editing.rule.active}
+                  onChange={(e) =>
+                    setEditing((s) => ({
+                      ...s,
+                      rule: { ...s.rule, active: e.target.checked },
+                    }))
+                  }
+                />
+              </label>
+              {formErr && (
+                <div className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700">
+                  {formErr}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 px-5 py-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => stage(editing.rule, editing.isNew)}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
+              >
+                <Icons.Save size={15} /> Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pending && (
+        <SlaConfirmModal
+          title={pending.title}
+          note={pending.note}
+          changes={pending.changes}
+          busy={busy}
+          onCancel={() => setPending(null)}
+          onConfirm={confirm}
+        />
+      )}
+    </>
+  );
+}
+
+function SlaChangeLogPanel({ notify }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (!supabase) {
+          if (alive) setRows(lsRead(SLA_LOG_KEY, []));
+          return;
+        }
+        const { data, error } = await supabase
+          .from("sla_change_log")
+          .select(
+            "id,setting,previous_value,new_value,changed_by_name,changed_at",
+          )
+          .order("changed_at", { ascending: false })
+          .limit(200);
+        if (error) throw error;
+        if (alive) setRows(data || []);
+      } catch (e) {
+        notify(
+          "Change log failed",
+          e?.message || "Unable to load SLA change log.",
+          "err",
+        );
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <>
+      <div className="p-6 border-b border-slate-100">
+        <h2 className="text-lg font-bold text-slate-900">SLA Change Log</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Every SLA configuration change — what changed, who changed it and
+          when.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+              <th className="px-6 py-3">Setting</th>
+              <th className="px-4 py-3">Previous</th>
+              <th className="px-4 py-3">New</th>
+              <th className="px-4 py-3">Changed By</th>
+              <th className="px-4 py-3">Date</th>
+              <th className="px-4 py-3">Time</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading && (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-6 py-8 text-center text-slate-400"
+                >
+                  Loading...
+                </td>
+              </tr>
+            )}
+            {!loading && rows.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-6 py-8 text-center text-slate-400"
+                >
+                  No SLA changes recorded yet.
+                </td>
+              </tr>
+            )}
+            {rows.map((r, i) => {
+              const [d, t] = slaFmtDateTime(r.changed_at);
+              return (
+                <tr key={r.id || i} className="hover:bg-slate-50/60">
+                  <td className="px-6 py-3.5 font-semibold text-slate-900">
+                    {r.setting}
+                  </td>
+                  <td className="px-4 py-3.5 text-slate-600">
+                    {r.previous_value}
+                  </td>
+                  <td className="px-4 py-3.5 font-semibold text-blue-700">
+                    {r.new_value}
+                  </td>
+                  <td className="px-4 py-3.5 text-slate-700">
+                    {r.changed_by_name || "—"}
+                  </td>
+                  <td className="px-4 py-3.5 text-slate-600">{d}</td>
+                  <td className="px-4 py-3.5 text-slate-600">{t}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// SLA MODULE — Phase 2/3 data adapter + Dashboard section
+// Stage timestamps are derived from the existing `status_history`
+// log (first time a TK entered each stage), so NO new columns on
+// `packages` are required. Transport mode comes from shipments.transport.
+// ============================================================
+const SLA_STAGE_KEYS = {
+  "Inbound Origin": "receivedAt",
+  "Outbound Origin": "outboundAt",
+  "Arrived Destination": "arrivedAt",
+  "Inbound Warehouse": "warehouseReceivedAt",
+  Completed: "completedAt",
+};
+
+function slaBuildInput(pkg, history, modeByShipment) {
+  const first = {};
+  let last = null;
+  for (const h of history || []) {
+    const key = SLA_STAGE_KEYS[h.status];
+    if (key && h.at && (!first[key] || new Date(h.at) < new Date(first[key])))
+      first[key] = h.at;
+    if (h.at && (!last || new Date(h.at) > new Date(last))) last = h.at;
+  }
+  const mode =
+    modeByShipment[String(pkg.shipment_id)] ||
+    pkg.method ||
+    pkg.transport ||
+    "";
+  return {
+    tk: pkg.tk,
+    customer: pkg.customer || "",
+    mode,
+    createdAt: pkg.created_at || null,
+    receivedAt: first.receivedAt || pkg.inbound_at || null,
+    // `outboundAt` column on packages wins; history is the fallback.
+    outboundAt: pkg.outboundAt || first.outboundAt || null,
+    arrivedAt: first.arrivedAt || null,
+    warehouseReceivedAt: first.warehouseReceivedAt || null,
+    completedAt:
+      first.completedAt || (pkg.status === "Completed" ? pkg.updated_at : null),
+    lastUpdatedAt: last || pkg.updated_at || null,
+    exception: pkg.exception || null,
+  };
+}
+
+// One shared, 60-second cache so Dashboard + notification sync + detail cards
+// don't each re-query the shipments table.
+let SLA_MODES_CACHE = { at: 0, promise: null };
+function slaLoadModes() {
+  if (!supabase) return Promise.resolve(null);
+  if (SLA_MODES_CACHE.promise && Date.now() - SLA_MODES_CACHE.at < 60000)
+    return SLA_MODES_CACHE.promise;
+  SLA_MODES_CACHE = {
+    at: Date.now(),
+    promise: supabase
+      .from("shipments")
+      .select("id,transport")
+      .limit(2000)
+      .then(({ data, error }) =>
+        error || !data
+          ? null
+          : Object.fromEntries(data.map((x) => [String(x.id), x.transport])),
+      ),
+  };
+  return SLA_MODES_CACHE.promise;
+}
+
+// Evaluates every package once per (packages, history, rules) change —
+// never inside render loops of individual rows.
+function useSlaRows() {
+  const { packages, getHistory } = usePackageTracking();
+  const { transport, warehouse, loading } = useSlaRules();
+  const [modes, setModes] = useState({});
+  const [tick, setTick] = useState(0);
+
+  // Days elapse even when no package changes, so re-evaluate every 10 min.
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 600000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+    let alive = true;
+    slaLoadModes().then((m) => alive && m && setModes(m));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const rows = useMemo(() => {
+    if (loading) return [];
+    const now = new Date();
+    return packages.map((p) => {
+      const input = slaBuildInput(p, getHistory(p.tk), modes);
+      return {
+        ...input,
+        sla: evaluateShipmentSla(input, transport, warehouse, now),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [packages, transport, warehouse, loading, modes, tick]);
+
+  return { rows, loading };
+}
+
+const SLA_RANGES = [
+  ["today", "Today"],
+  ["yesterday", "Yesterday"],
+  ["7d", "Last 7 Days"],
+  ["30d", "Last 30 Days"],
+  ["custom", "Custom Range"],
+];
+
+function slaRangeBounds(range, from, to) {
+  const sod = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const t = sod(new Date());
+  const day = SLA_DAY_MS;
+  if (range === "today") return [t, new Date(t.getTime() + day)];
+  if (range === "yesterday") return [new Date(t.getTime() - day), t];
+  if (range === "7d")
+    return [new Date(t.getTime() - 6 * day), new Date(t.getTime() + day)];
+  if (range === "30d")
+    return [new Date(t.getTime() - 29 * day), new Date(t.getTime() + day)];
+  const f = from ? sod(new Date(from)) : null;
+  const e = to ? new Date(sod(new Date(to)).getTime() + day) : null;
+  return [f, e];
+}
+
+const SLA_BADGE = {
+  [SLA_STATUS.ON_TIME]: "bg-emerald-50 text-emerald-700",
+  [SLA_STATUS.WARNING]: "bg-amber-50 text-amber-700",
+  [SLA_STATUS.LATE]: "bg-red-50 text-red-700",
+  [SLA_STATUS.NO_UPDATE]: "bg-slate-100 text-slate-600",
+  [SLA_STATUS.COMPLETED]: "bg-blue-50 text-blue-700",
+};
+
+function SlaBadge({ status }) {
+  return (
+    <span
+      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${SLA_BADGE[status] || "bg-slate-100 text-slate-600"}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function SlaDashboardSection() {
+  const navigate = useNavigate();
+  const { items: alerts } = useSlaNotifications({ limit: 5 });
+  const { rows, loading } = useSlaRows();
+  const [range, setRange] = useState("30d");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+
+  const data = useMemo(() => {
+    const [a, b] = slaRangeBounds(range, from, to);
+    const list = rows.filter((r) => {
+      if (!r.createdAt) return true;
+      const t = new Date(r.createdAt);
+      return (!a || t >= a) && (!b || t < b);
+    });
+    const count = (s) => list.filter((r) => r.sla.overall === s).length;
+    const perf = {
+      total: list.length,
+      onTime: count(SLA_STATUS.ON_TIME),
+      warning: count(SLA_STATUS.WARNING),
+      late: count(SLA_STATUS.LATE),
+      noUpdate: count(SLA_STATUS.NO_UPDATE),
+      completed: count(SLA_STATUS.COMPLETED),
+    };
+    const modes = ["Land", "Sea", "Air"].map((m) => {
+      const l = list.filter(
+        (r) => String(r.mode).toLowerCase() === m.toLowerCase(),
+      );
+      const c = (s) => l.filter((r) => r.sla.overall === s).length;
+      const ok = c(SLA_STATUS.ON_TIME) + c(SLA_STATUS.COMPLETED);
+      return {
+        mode: m,
+        total: l.length,
+        onTime: c(SLA_STATUS.ON_TIME),
+        warning: c(SLA_STATUS.WARNING),
+        late: c(SLA_STATUS.LATE),
+        noUpdate: c(SLA_STATUS.NO_UPDATE),
+        pct: l.length ? Math.round((ok / l.length) * 100) : 0,
+      };
+    });
+    return { perf, modes, priority: list.filter((r) => r.exception).length };
+  }, [rows, range, from, to]);
+
+  const card = "bg-white border border-mist-200 rounded-md shadow-panel";
+  const issue = [
+    ["Late Shipments", data.perf.late, "text-red-600", "bg-red-50"],
+    ["No Update", data.perf.noUpdate, "text-slate-600", "bg-slate-100"],
+    ["Warning", data.perf.warning, "text-amber-600", "bg-amber-50"],
+    ["Priority (Exceptions)", data.priority, "text-blue-700", "bg-blue-50"],
+  ];
+  const perf = [
+    ["Total", data.perf.total],
+    ["On Time", data.perf.onTime],
+    ["Warning", data.perf.warning],
+    ["Late", data.perf.late],
+    ["No Update", data.perf.noUpdate],
+    ["Completed", data.perf.completed],
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display font-bold text-sm text-ink-900">
+          SLA Overview
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {SLA_RANGES.map(([k, l]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setRange(k)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold border transition ${range === k ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}
+            >
+              {l}
+            </button>
+          ))}
+          {range === "custom" && (
+            <>
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-8 rounded-lg border border-slate-200 px-2 text-xs"
+              />
+              <span className="text-xs text-slate-400">→</span>
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className="h-8 rounded-lg border border-slate-200 px-2 text-xs"
+              />
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {issue.map(([label, n, tc, bg]) => (
+          <div key={label} className={`${card} p-4 flex items-center gap-3`}>
+            <div
+              className={`h-10 w-10 rounded-lg grid place-items-center ${bg} ${tc}`}
+            >
+              <Icons.TriangleAlert size={18} />
+            </div>
+            <div>
+              <div className="text-2xl font-extrabold text-ink-900 leading-none">
+                {loading ? "…" : n}
+              </div>
+              <div className="text-xs text-ink-600/60 mt-1">{label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className={`${card} p-4`}>
+        <h3 className="font-display font-bold text-sm text-ink-900 mb-3">
+          Shipment Performance
+        </h3>
+        <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+          {perf.map(([l, n]) => (
+            <div key={l} className="rounded-lg bg-slate-50 px-3 py-2.5">
+              <div className="text-xl font-extrabold text-ink-900">
+                {loading ? "…" : n}
+              </div>
+              <div className="text-xs text-ink-600/60">{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className={`${card} overflow-hidden`}>
+        <div className="px-4 py-3 border-b border-mist-200">
+          <h3 className="font-display font-bold text-sm text-ink-900">
+            Transport Performance
+          </h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                {[
+                  "Transport",
+                  "Total",
+                  "On Time",
+                  "Warning",
+                  "Late",
+                  "No Update",
+                  "On-Time %",
+                ].map((h) => (
+                  <th key={h} className="px-4 py-2.5">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.modes.map((m) => (
+                <tr key={m.mode}>
+                  <td className="px-4 py-3 font-semibold text-slate-900">
+                    {m.mode}
+                  </td>
+                  <td className="px-4 py-3">{m.total}</td>
+                  <td className="px-4 py-3 text-emerald-700 font-semibold">
+                    {m.onTime}
+                  </td>
+                  <td className="px-4 py-3 text-amber-700 font-semibold">
+                    {m.warning}
+                  </td>
+                  <td className="px-4 py-3 text-red-700 font-semibold">
+                    {m.late}
+                  </td>
+                  <td className="px-4 py-3 text-slate-600 font-semibold">
+                    {m.noUpdate}
+                  </td>
+                  <td className="px-4 py-3 font-bold">{m.pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="px-4 py-2.5 text-xs text-slate-500 border-t border-slate-100">
+          On-Time % = (On Time + Completed) ÷ Total. Date filter uses the
+          shipment created date.
+        </p>
+      </div>
+
+      <div className={`${card} overflow-hidden`}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-mist-200">
+          <h3 className="font-display font-bold text-sm text-ink-900">
+            SLA Alerts
+          </h3>
+          <button
+            type="button"
+            onClick={() => navigate("/notifications")}
+            className="text-xs font-medium text-signal-blue hover:underline"
+          >
+            View all
+          </button>
+        </div>
+        {alerts.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-ink-600/45">
+            No active SLA alerts.
+          </p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {alerts.map((n) => (
+              <li key={n.id} className="flex items-center gap-3 px-4 py-3">
+                <SlaNotifIcon level={n.level} />
+                <div className="min-w-0 flex-1">
+                  <Link
+                    to={`/packages/${n.tk}`}
+                    className="text-sm font-medium text-ink-900 hover:text-signal-blue block truncate"
+                  >
+                    {n.message}
+                  </Link>
+                  <div className="text-xs text-ink-600/55">
+                    {timeAgoLabel(n.created_at)}
+                  </div>
+                </div>
+                <SlaBadge status={n.level} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- SLA Performance card for Package / Shipment Detail ----
+function slaFmtDur(ms) {
+  if (ms == null || ms < 0) return "—";
+  const h = Math.floor(ms / 3600000);
+  if (h < 1) return "<1 hr";
+  if (h < 24) return `${h} hr`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh ? `${d} d ${rh} hr` : `${d} d`;
+}
+
+function SlaPackageCard({ pkg, tk }) {
+  const { items: tkAlerts } = useSlaNotifications({
+    tk: pkg?.tk || tk,
+    limit: 10,
+  });
+  const { getHistory } = usePackageTracking();
+  const { transport, warehouse, loading } = useSlaRules();
+  const [mode, setMode] = useState("");
+
+  useEffect(() => {
+    if (!supabase || !pkg?.shipment_id) return;
+    let alive = true;
+    supabase
+      .from("shipments")
+      .select("transport")
+      .eq("id", pkg.shipment_id)
+      .maybeSingle()
+      .then(({ data }) => alive && data && setMode(data.transport || ""));
+    return () => {
+      alive = false;
+    };
+  }, [pkg?.shipment_id]);
+
+  const view = useMemo(() => {
+    if (!pkg || loading) return null;
+    const input = slaBuildInput(
+      { ...pkg, tk: pkg.tk || tk },
+      getHistory(pkg.tk || tk),
+      { [String(pkg.shipment_id)]: mode },
+    );
+    return {
+      input,
+      res: evaluateShipmentSla(input, transport, warehouse, new Date()),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pkg, tk, mode, transport, warehouse, loading]);
+
+  if (!view) return null;
+  const { input: i, res } = view;
+  const t = res.transit;
+  const w = res.warehouse;
+  const now = Date.now();
+
+  const stages = [
+    [
+      "Inbound Origin",
+      i.receivedAt,
+      w && w.warehouse.startsWith("China") ? w.status : null,
+    ],
+    ["Outbound Origin", i.outboundAt, null],
+    ["In Transit", i.outboundAt, t ? t.status : null],
+    ["Arrived Cambodia", i.arrivedAt, null],
+    [
+      "Cambodia Warehouse",
+      i.warehouseReceivedAt,
+      w && w.warehouse.startsWith("Cambodia") ? w.status : null,
+    ],
+    [
+      "Completed",
+      i.completedAt,
+      res.overall === SLA_STATUS.COMPLETED ? SLA_STATUS.COMPLETED : null,
+    ],
+  ];
+  const reached = stages.map((s) => !!s[1]);
+  const currentIdx = reached.lastIndexOf(true);
+  const durations = stages.map(([, ts], idx) => {
+    if (!ts) return null;
+    const next = stages
+      .slice(idx + 1)
+      .find((s) => s[1] && new Date(s[1]) > new Date(ts));
+    const end = next
+      ? new Date(next[1]).getTime()
+      : idx === currentIdx && !i.completedAt
+        ? now
+        : null;
+    return end ? end - new Date(ts).getTime() : null;
+  });
+
+  const summary = [
+    ["Transport", t?.mode || i.mode || "—"],
+    ["Expected Transit", t ? `${t.expectedDays} days` : "—"],
+    ["Current Duration", t ? `${t.elapsedDays} days` : "—"],
+    ["Delay", t ? `${t.delayDays} days` : "—"],
+    ["Last Warehouse Update", w ? `${w.daysWithoutUpdate} days ago` : "—"],
+    [
+      "Warehouse SLA",
+      w ? `${w.allowedDays} ${w.allowedDays === 1 ? "day" : "days"}` : "—",
+    ],
+  ];
+
+  return (
+    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
+          <Icons.Timer size={16} className="text-ink-600/60" />
+          SLA Performance
+        </h2>
+        <div className="flex items-center gap-2">
+          {t && <SlaBadge status={t.status} />}
+          {w && w.status === SLA_STATUS.NO_UPDATE && (
+            <SlaBadge status={SLA_STATUS.NO_UPDATE} />
+          )}
+          {res.overall === SLA_STATUS.COMPLETED && (
+            <SlaBadge status={SLA_STATUS.COMPLETED} />
+          )}
+          {!t && !w && res.overall !== SLA_STATUS.COMPLETED && (
+            <span className="text-xs text-slate-500">Not evaluated yet</span>
+          )}
+        </div>
+      </div>
+
+      {!t && !i.mode && (
+        <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Transit SLA needs a transport mode (Land / Sea / Air) from the linked
+          shipment and a departure date.
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        {summary.map(([k, v]) => (
+          <div key={k} className="rounded-lg bg-slate-50 px-3 py-2.5">
+            <div className="text-xs text-ink-600/60">{k}</div>
+            <div className="text-sm font-bold text-ink-900 mt-0.5">{v}</div>
+          </div>
+        ))}
+        <div className="rounded-lg bg-slate-50 px-3 py-2.5">
+          <div className="text-xs text-ink-600/60">Warehouse Status</div>
+          <div className="mt-1">
+            {w ? (
+              <SlaBadge status={w.status} />
+            ) : (
+              <span className="text-sm font-bold">—</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {w && w.status === SLA_STATUS.NO_UPDATE && (
+        <p className="mb-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-700">
+          {w.warehouse} has not updated this shipment for {w.daysWithoutUpdate}{" "}
+          days (allowed {w.allowedDays}).
+        </p>
+      )}
+      {t && t.status === SLA_STATUS.LATE && (
+        <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+          Late by {t.delayDays} days against the expected {t.expectedDays}-day
+          transit.
+        </p>
+      )}
+
+      {tkAlerts.length > 0 && (
+        <div className="mb-3 space-y-2">
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Active alerts
+          </div>
+          {tkAlerts.map((n) => (
+            <div
+              key={n.id}
+              className="flex items-center gap-2.5 rounded-lg border border-slate-200 px-3 py-2"
+            >
+              <SlaNotifIcon level={n.level} />
+              <span className="flex-1 text-sm text-slate-800">{n.message}</span>
+              <span className="text-xs text-slate-500 whitespace-nowrap">
+                {timeAgoLabel(n.created_at)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ol className="mt-4">
+        {stages.map(([label, ts, status], idx) => {
+          const [d, tm] = ts ? slaFmtDateTime(ts) : ["Pending", ""];
+          const done = !!ts;
+          return (
+            <li key={label} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <span
+                  className={`mt-1 h-3 w-3 rounded-full ${done ? (idx === currentIdx ? "bg-blue-600 ring-4 ring-blue-100" : "bg-emerald-500") : "bg-slate-300"}`}
+                />
+                {idx < stages.length - 1 && (
+                  <span className="w-px flex-1 bg-slate-200 my-1" />
+                )}
+              </div>
+              <div className="flex-1 pb-4 flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div
+                    className={`text-sm font-semibold ${done ? "text-ink-900" : "text-ink-600/40"}`}
+                  >
+                    {label}
+                  </div>
+                  <div className="text-xs text-ink-600/55">
+                    {done ? `${d} · ${tm}` : "Pending"}
+                    {done && durations[idx] != null && (
+                      <> · Duration {slaFmtDur(durations[idx])}</>
+                    )}
+                  </div>
+                </div>
+                {status && <SlaBadge status={status} />}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+// ============================================================
+// SLA MODULE — Phase 5: Notifications
+// Alerts are created when a shipment becomes Warning / Late / No Update,
+// de-duplicated per (TK, kind, level), auto-resolved when the condition
+// clears, and shown in the Dashboard, Notification Center (/notifications),
+// the Topbar bell and Shipment Detail.
+// ============================================================
+const SLA_NOTIF_KEY = "cargo_bridge_sla_notifs_v1";
+const SLA_NOTIF_SET_KEY = "cargo_bridge_sla_notif_settings_v1";
+const SLA_NOTIF_EVENT = "cargo-bridge-sla-notif-updated";
+const SLA_NOTIF_LEVELS = [
+  ["warning", "Warning", "Shipment is approaching its transit SLA limit."],
+  ["late", "Late", "Shipment has passed its transit SLA late threshold."],
+  [
+    "no_update",
+    "No Update",
+    "A warehouse has not updated the shipment within the allowed days.",
+  ],
+];
+const slaNotifSettingKey = (level) =>
+  level === "Warning" ? "warning" : level === "Late" ? "late" : "no_update";
+
+// ---- pure: what alerts should exist right now ----
+function slaNotifDesired(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (!r.tk || r.completedAt) continue;
+    const t = r.sla.transit;
+    const w = r.sla.warehouse;
+    if (t && !t.finished) {
+      if (t.status === SLA_STATUS.LATE)
+        out.push({
+          tk: r.tk,
+          kind: "transit",
+          level: "Late",
+          delay_days: t.delayDays,
+          message: `Shipment ${r.tk} is Late by ${t.delayDays} ${t.delayDays === 1 ? "day" : "days"}.`,
+        });
+      else if (t.status === SLA_STATUS.WARNING)
+        out.push({
+          tk: r.tk,
+          kind: "transit",
+          level: "Warning",
+          delay_days: 0,
+          message: `Shipment ${r.tk} is approaching SLA limit.`,
+        });
+    }
+    if (w && w.status === SLA_STATUS.NO_UPDATE)
+      out.push({
+        tk: r.tk,
+        kind: "warehouse",
+        level: "No Update",
+        delay_days: w.delayDays,
+        message: `Shipment ${r.tk} has not been updated by ${w.warehouse} for ${w.daysWithoutUpdate} ${w.daysWithoutUpdate === 1 ? "day" : "days"}.`,
+      });
+  }
+  return out.map((d) => ({ ...d, dedupe_key: `${d.tk}|${d.kind}|${d.level}` }));
+}
+
+// ---- pure: diff desired vs stored ----
+// Only touches TKs that were actually evaluated (`tks`), so a user whose data
+// scope hides some packages can never resolve alerts for packages they can't see.
+function slaNotifPlan(existing, desired, tks, settings, cap = 300) {
+  const enabled = (level) => settings[slaNotifSettingKey(level)] !== false;
+  const byKey = new Map(existing.map((e) => [e.dedupe_key, e]));
+  const want = new Set(desired.map((d) => d.dedupe_key));
+  const insert = [];
+  const reopen = [];
+  const resolve = [];
+  for (const d of desired) {
+    if (!enabled(d.level)) continue;
+    const e = byKey.get(d.dedupe_key);
+    if (!e) insert.push(d);
+    else if (e.resolved_at) reopen.push(e.id);
+  }
+  for (const e of existing)
+    if (!e.resolved_at && tks.has(e.tk) && !want.has(e.dedupe_key))
+      resolve.push(e.id);
+  return {
+    insert: insert.slice(0, cap),
+    reopen: reopen.slice(0, cap),
+    resolve,
+  };
+}
+
+// ---- storage (Supabase, with a localStorage fallback in UI-only mode) ----
+async function slaNotifLoadSettings() {
+  const base = { warning: true, late: true, no_update: true };
+  if (!supabase) return { ...base, ...lsRead(SLA_NOTIF_SET_KEY, {}) };
+  const { data, error } = await supabase
+    .from("sla_notification_settings")
+    .select("id,enabled");
+  if (error) throw error;
+  (data || []).forEach((r) => (base[r.id] = !!r.enabled));
+  return base;
+}
+
+async function slaNotifFetch({
+  tk,
+  includeResolved = false,
+  limit = 200,
+} = {}) {
+  if (!supabase) {
+    return lsRead(SLA_NOTIF_KEY, [])
+      .filter(
+        (n) => (!tk || n.tk === tk) && (includeResolved || !n.resolved_at),
+      )
+      .slice(0, limit);
+  }
+  let q = supabase
+    .from("sla_notifications")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (tk) q = q.eq("tk", tk);
+  if (!includeResolved) q = q.is("resolved_at", null);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+const slaChunk = (arr, n = 150) =>
+  Array.from({ length: Math.ceil(arr.length / n) }, (_, i) =>
+    arr.slice(i * n, i * n + n),
+  );
+
+async function slaNotifSync(rows) {
+  const settings = await slaNotifLoadSettings();
+  const desired = slaNotifDesired(rows);
+  const tks = new Set(rows.map((r) => r.tk));
+  const now = new Date().toISOString();
+  let existing;
+  if (supabase) {
+    const { data, error } = await supabase
+      .from("sla_notifications")
+      .select("id,dedupe_key,tk,resolved_at")
+      .limit(10000);
+    if (error) throw error;
+    existing = data || [];
+  } else existing = lsRead(SLA_NOTIF_KEY, []);
+
+  const plan = slaNotifPlan(existing, desired, tks, settings);
+  if (!plan.insert.length && !plan.reopen.length && !plan.resolve.length)
+    return false;
+
+  if (supabase) {
+    if (plan.insert.length) {
+      const payload = plan.insert.map(
+        ({ dedupe_key, tk, kind, level, message, delay_days }) => ({
+          dedupe_key,
+          tk,
+          kind,
+          level,
+          message,
+          delay_days,
+        }),
+      );
+      const { error } = await supabase
+        .from("sla_notifications")
+        .upsert(payload, { onConflict: "dedupe_key", ignoreDuplicates: true });
+      if (error) throw error;
+    }
+    for (const ids of slaChunk(plan.reopen)) {
+      const { error } = await supabase
+        .from("sla_notifications")
+        .update({ resolved_at: null, read_at: null, created_at: now })
+        .in("id", ids);
+      if (error) throw error;
+    }
+    for (const ids of slaChunk(plan.resolve)) {
+      const { error } = await supabase
+        .from("sla_notifications")
+        .update({ resolved_at: now })
+        .in("id", ids);
+      if (error) throw error;
+    }
+  } else {
+    const reopen = new Set(plan.reopen);
+    const resolve = new Set(plan.resolve);
+    const next = existing.map((n) =>
+      reopen.has(n.id)
+        ? { ...n, resolved_at: null, read_at: null, created_at: now }
+        : resolve.has(n.id)
+          ? { ...n, resolved_at: now }
+          : n,
+    );
+    plan.insert.forEach((d, i) =>
+      next.unshift({
+        id: `local-${Date.now()}-${i}`,
+        ...d,
+        created_at: now,
+        read_at: null,
+        resolved_at: null,
+      }),
+    );
+    lsWrite(SLA_NOTIF_KEY, next.slice(0, 1000));
+  }
+  return true;
+}
+
+async function slaNotifMarkRead(ids) {
+  const now = new Date().toISOString();
+  if (!supabase) {
+    lsWrite(
+      SLA_NOTIF_KEY,
+      lsRead(SLA_NOTIF_KEY, []).map((n) =>
+        (!ids || ids.includes(n.id)) && !n.read_at ? { ...n, read_at: now } : n,
+      ),
+    );
+  } else {
+    let q = supabase
+      .from("sla_notifications")
+      .update({ read_at: now })
+      .is("read_at", null);
+    if (ids) q = q.in("id", ids);
+    const { error } = await q;
+    if (error) throw error;
+  }
+  window.dispatchEvent(new CustomEvent(SLA_NOTIF_EVENT));
+}
+
+function useSlaNotifications({
+  tk,
+  includeResolved = false,
+  limit = 200,
+} = {}) {
+  const [state, setState] = useState({ items: [], loading: true, error: "" });
+  const load = React.useCallback(async () => {
+    try {
+      const items = await slaNotifFetch({ tk, includeResolved, limit });
+      setState({ items, loading: false, error: "" });
+    } catch (e) {
+      setState((s) => ({
+        ...s,
+        loading: false,
+        error: e?.message || "Unable to load notifications.",
+      }));
+    }
+  }, [tk, includeResolved, limit]);
+  useEffect(() => {
+    load();
+    const onFocus = () => document.visibilityState === "visible" && load();
+    window.addEventListener(SLA_NOTIF_EVENT, load);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener(SLA_NOTIF_EVENT, load);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [load]);
+  return state;
+}
+
+// Mounted once in Layout. Re-evaluates when package data, SLA rules or the
+// notification settings change (and every 10 min via useSlaRows' tick).
+function SlaNotificationSync() {
+  const { rows, loading } = useSlaRows();
+  const sig = useRef("");
+  const busy = useRef(false);
+  const [ver, setVer] = useState(0);
+  useEffect(() => {
+    const bump = () => {
+      sig.current = "";
+      setVer((v) => v + 1);
+    };
+    window.addEventListener("cargo-bridge-sla-updated", bump);
+    return () => window.removeEventListener("cargo-bridge-sla-updated", bump);
+  }, []);
+  useEffect(() => {
+    if (loading || !rows.length || busy.current) return;
+    const s = rows
+      .map(
+        (r) =>
+          `${r.tk}:${r.sla.overall}:${r.sla.transit?.status || ""}:${r.sla.warehouse?.status || ""}:${r.sla.transit?.delayDays ?? ""}`,
+      )
+      .join("|");
+    if (s === sig.current) return;
+    sig.current = s;
+    busy.current = true;
+    slaNotifSync(rows)
+      .then(
+        (changed) =>
+          changed && window.dispatchEvent(new CustomEvent(SLA_NOTIF_EVENT)),
+      )
+      .catch((e) => console.error("[SLA notifications] sync failed", e))
+      .finally(() => {
+        busy.current = false;
+      });
+  }, [rows, loading, ver]);
+  return null;
+}
+
+function SlaNotifIcon({ level }) {
+  const cls =
+    level === "Late"
+      ? "bg-red-50 text-red-600"
+      : level === "Warning"
+        ? "bg-amber-50 text-amber-600"
+        : "bg-slate-100 text-slate-600";
+  const I =
+    level === "Late"
+      ? Icons.AlarmClock
+      : level === "Warning"
+        ? Icons.TriangleAlert
+        : Icons.BellOff;
+  return (
+    <div
+      className={`h-9 w-9 rounded-lg grid place-items-center shrink-0 ${cls}`}
+    >
+      <I size={17} />
+    </div>
+  );
+}
+
+function NotificationCenterPage() {
+  const navigate = useNavigate();
+  const { items, loading, error } = useSlaNotifications({
+    includeResolved: true,
+    limit: 500,
+  });
+  const [filter, setFilter] = useState("unread");
+  const [level, setLevel] = useState("all");
+  const [q, setQ] = useState("");
+  const [showResolved, setShowResolved] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE = 20;
+
+  useEffect(() => setPage(1), [filter, level, q, showResolved]);
+
+  const list = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return items.filter(
+      (n) =>
+        (showResolved || !n.resolved_at) &&
+        (filter === "all" || !n.read_at) &&
+        (level === "all" || n.level === level) &&
+        (!needle || `${n.tk} ${n.message}`.toLowerCase().includes(needle)),
+    );
+  }, [items, filter, level, q, showResolved]);
+
+  const unread = items.filter((n) => !n.read_at && !n.resolved_at).length;
+  const pages = Math.max(1, Math.ceil(list.length / PAGE));
+  const view = list.slice((page - 1) * PAGE, page * PAGE);
+  const pill = (active) =>
+    `rounded-lg px-3 py-1.5 text-xs font-semibold border transition ${active ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`;
+
+  return (
+    <div className="max-w-[1100px] mx-auto space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-extrabold text-slate-900">
+            Notification Center
+          </h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            SLA alerts for Warning, Late and No Update shipments · {unread}{" "}
+            unread
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={!unread}
+          onClick={() => slaNotifMarkRead(null).catch(() => {})}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          <Icons.CheckCheck size={15} /> Mark all read
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {error} — run the SLA notifications SQL migration in Supabase, then
+          reload.
+        </div>
+      )}
+
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 p-4 border-b border-slate-100">
+          <button
+            type="button"
+            className={pill(filter === "unread")}
+            onClick={() => setFilter("unread")}
+          >
+            Unread
+          </button>
+          <button
+            type="button"
+            className={pill(filter === "all")}
+            onClick={() => setFilter("all")}
+          >
+            All
+          </button>
+          <span className="mx-1 h-5 w-px bg-slate-200" />
+          {["all", "Warning", "Late", "No Update"].map((l) => (
+            <button
+              key={l}
+              type="button"
+              className={pill(level === l)}
+              onClick={() => setLevel(l)}
+            >
+              {l === "all" ? "Any level" : l}
+            </button>
+          ))}
+          <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-blue-600"
+              checked={showResolved}
+              onChange={(e) => setShowResolved(e.target.checked)}
+            />
+            Show resolved
+          </label>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search TK or message"
+            className="h-9 w-56 rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </div>
+
+        {loading ? (
+          <p className="px-5 py-10 text-center text-sm text-slate-400">
+            Loading...
+          </p>
+        ) : view.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-slate-400">
+            No notifications.
+          </p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {view.map((n) => (
+              <li
+                key={n.id}
+                className={`flex items-start gap-3 px-4 py-3.5 ${n.read_at ? "" : "bg-blue-50/40"}`}
+              >
+                <SlaNotifIcon level={n.level} />
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={`text-sm ${n.read_at ? "text-slate-700" : "font-semibold text-slate-900"}`}
+                  >
+                    {n.message}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <SlaBadge status={n.level} />
+                    {n.resolved_at && (
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
+                        Resolved
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="font-semibold text-blue-600 hover:underline"
+                      onClick={() => {
+                        if (!n.read_at)
+                          slaNotifMarkRead([n.id]).catch(() => {});
+                        navigate(`/packages/${n.tk}`);
+                      }}
+                    >
+                      {n.tk}
+                    </button>
+                    <span>{timeAgoLabel(n.created_at)}</span>
+                  </div>
+                </div>
+                {!n.read_at && (
+                  <button
+                    type="button"
+                    onClick={() => slaNotifMarkRead([n.id]).catch(() => {})}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 whitespace-nowrap"
+                  >
+                    Mark read
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 text-xs text-slate-500">
+          <span>
+            {list.length} notification{list.length === 1 ? "" : "s"}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => p - 1)}
+              className="rounded-lg border border-slate-200 px-2.5 py-1 font-semibold disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span>
+              Page {page} / {pages}
+            </span>
+            <button
+              type="button"
+              disabled={page >= pages}
+              onClick={() => setPage((p) => p + 1)}
+              className="rounded-lg border border-slate-200 px-2.5 py-1 font-semibold disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SlaNotificationSettingsPanel({ notify }) {
+  const { user } = useAuth();
+  const [saved, setSaved] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    slaNotifLoadSettings()
+      .then((s) => {
+        setSaved(s);
+        setDraft(s);
+      })
+      .catch((e) =>
+        notify(
+          "Load failed",
+          e?.message || "Run the SLA notifications SQL migration.",
+          "err",
+        ),
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const changes =
+    draft && saved
+      ? SLA_NOTIF_LEVELS.filter(([k]) => !!draft[k] !== !!saved[k]).map(
+          ([k, label]) => ({
+            setting: `Notifications — ${label} alerts`,
+            previous: saved[k] ? "Enabled" : "Disabled",
+            next: draft[k] ? "Enabled" : "Disabled",
+          }),
+        )
+      : [];
+
+  const save = async () => {
+    try {
+      setBusy(true);
+      const by = user?.id || null;
+      const byName = user?.full_name || user?.name || user?.email || "Admin";
+      if (supabase) {
+        const { error } = await supabase
+          .from("sla_notification_settings")
+          .upsert(
+            SLA_NOTIF_LEVELS.map(([k]) => ({
+              id: k,
+              enabled: !!draft[k],
+              updated_at: new Date().toISOString(),
+              updated_by: by,
+            })),
+            { onConflict: "id" },
+          );
+        if (error) throw error;
+        const { error: logErr } = await supabase.from("sla_change_log").insert(
+          changes.map((c) => ({
+            setting: c.setting,
+            previous_value: c.previous,
+            new_value: c.next,
+            changed_by: by,
+            changed_by_name: byName,
+          })),
+        );
+        if (logErr) throw logErr;
+      } else {
+        lsWrite(SLA_NOTIF_SET_KEY, draft);
+        lsWrite(
+          SLA_LOG_KEY,
+          [
+            ...changes.map((c) => ({
+              setting: c.setting,
+              previous_value: c.previous,
+              new_value: c.next,
+              changed_by_name: byName,
+              changed_at: new Date().toISOString(),
+            })),
+            ...lsRead(SLA_LOG_KEY, []),
+          ].slice(0, 500),
+        );
+      }
+      setSaved(draft);
+      window.dispatchEvent(new CustomEvent("cargo-bridge-sla-updated"));
+      notify(
+        "Saved",
+        "Notification settings updated and recorded in the change log.",
+      );
+    } catch (e) {
+      notify(
+        "Save failed",
+        e?.message || "Unable to save notification settings.",
+        "err",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="p-6 border-b border-slate-100">
+        <h2 className="text-lg font-bold text-slate-900">Notifications</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Choose which SLA events create a notification. Existing alerts are not
+          deleted when a type is turned off.
+        </p>
+      </div>
+      <div className="p-6 space-y-3">
+        {!draft ? (
+          <p className="text-sm text-slate-400">Loading...</p>
+        ) : (
+          SLA_NOTIF_LEVELS.map(([k, label, hint]) => (
+            <label
+              key={k}
+              className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3.5 cursor-pointer hover:bg-slate-50"
+            >
+              <span>
+                <span className="block font-semibold text-sm text-slate-800">
+                  {label} alerts
+                </span>
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  {hint}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                className="h-5 w-5 accent-blue-600"
+                checked={!!draft[k]}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, [k]: e.target.checked }))
+                }
+              />
+            </label>
+          ))
+        )}
+      </div>
+      <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
+        <button
+          type="button"
+          disabled={busy || !changes.length}
+          onClick={() => setDraft(saved)}
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy || !changes.length}
+          onClick={save}
+          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          <Icons.Save size={15} /> {busy ? "Saving..." : "Save"}
+        </button>
+      </div>
+    </>
+  );
+}
 
 function SettingsPage() {
   const { user } = useAuth();
@@ -24817,6 +27006,10 @@ function SettingsPage() {
     ["shipping", "Shipping & Pricing", Icons.BadgeDollarSign],
     ["history", "Policy History", Icons.History],
     ["label", "Print Label", Icons.Printer],
+    ["slaTransport", "Transport SLA", Icons.Truck],
+    ["slaWarehouse", "Warehouse Update SLA", Icons.Warehouse],
+    ["slaNotif", "Notifications", Icons.Bell],
+    ["slaLog", "SLA Change Log", Icons.ClipboardList],
   ];
   const input =
     "mt-1.5 w-full h-11 rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
@@ -25413,34 +27606,46 @@ function SettingsPage() {
                 </div>
               </>
             )}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
-              <button
-                type="button"
-                onClick={async () => {
-                  if (supabase) {
-                    try {
-                      const remote = await fetchSystemSettingsRemote();
-                      if (remote) setSettings(remote);
-                    } catch (e) {
-                      notify("Reload failed", e.message, "err");
-                    }
-                  } else setSettings(getSystemSettings());
-                }}
-                disabled={saving || loading}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={save}
-                disabled={saving || loading || !!remoteError}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-              >
-                <Icons.Save size={16} />
-                {saving ? "Saving..." : "Save Changes"}
-              </button>
-            </div>
+            {tab === "slaTransport" && (
+              <SlaRulesPanel kind="transport" notify={notify} />
+            )}
+            {tab === "slaWarehouse" && (
+              <SlaRulesPanel kind="warehouse" notify={notify} />
+            )}
+            {tab === "slaLog" && <SlaChangeLogPanel notify={notify} />}
+            {tab === "slaNotif" && (
+              <SlaNotificationSettingsPanel notify={notify} />
+            )}
+            {!String(tab).startsWith("sla") && (
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (supabase) {
+                      try {
+                        const remote = await fetchSystemSettingsRemote();
+                        if (remote) setSettings(remote);
+                      } catch (e) {
+                        notify("Reload failed", e.message, "err");
+                      }
+                    } else setSettings(getSystemSettings());
+                  }}
+                  disabled={saving || loading}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={save}
+                  disabled={saving || loading || !!remoteError}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <Icons.Save size={16} />
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -25475,6 +27680,1488 @@ function SettingsPage() {
   );
 }
 
+// ============================================================
+// REPORTS MODULE — Phase 4
+// 7 reports on top of the SLA engine (useSlaRows). Search, filters,
+// sort, pagination, CSV + Excel (.xls) export. No new DB tables.
+// ============================================================
+const REPORT_TABS = [
+  { key: "shipment", label: "Shipment Report", icon: "FileText" },
+  { key: "transit", label: "Transit Performance", icon: "Gauge" },
+  { key: "late", label: "Late Shipment Report", icon: "Clock" },
+  { key: "warehouse", label: "Warehouse Update Report", icon: "Warehouse" },
+  { key: "transport", label: "Transport Report", icon: "Truck" },
+  { key: "container", label: "Container Report", icon: "Container" },
+  { key: "sla", label: "SLA Report", icon: "ClipboardCheck" },
+];
+const REPORT_GROUPS = [
+  {
+    key: "shipment",
+    label: "Shipment & Transit",
+    bar: "bg-blue-600",
+    items: [
+      ["shipment", "Overview of every shipment with its SLA result."],
+      ["transit", "Expected vs actual transit days per shipment."],
+      ["late", "Shipments that passed the late threshold, with delay days."],
+    ],
+  },
+  {
+    key: "ops",
+    label: "Warehouse & Container",
+    bar: "bg-purple-600",
+    items: [
+      ["warehouse", "Shipments where the warehouse has not updated in time."],
+      ["container", "Containers, seals, TK counts, departure and ETA."],
+    ],
+  },
+  {
+    key: "perf",
+    label: "SLA & Transport Performance",
+    bar: "bg-emerald-600",
+    items: [
+      ["transport", "Land / Sea / Air totals, late counts and on-time %."],
+      ["sla", "Transit SLA and warehouse SLA side by side."],
+    ],
+  },
+];
+
+function ReportsHubPage() {
+  const [q, setQ] = useState("");
+  const [closed, setClosed] = useState({});
+  const query = rpLc(q);
+  const groups = REPORT_GROUPS.map((g) => ({
+    ...g,
+    cards: g.items
+      .map(([k, desc]) => ({ ...REPORT_TABS.find((t) => t.key === k), desc }))
+      .filter((c) => !query || rpLc(`${c.label} ${c.desc}`).includes(query)),
+  })).filter((g) => g.cards.length);
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[1100px] space-y-5 p-5 md:p-7">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+            Reports &amp; Analytics
+          </h1>
+          <p className="text-sm text-slate-500">
+            Access all shipment, SLA and warehouse reports in one place. Use the
+            search or the categorized cards to navigate.
+          </p>
+        </div>
+
+        <div className="relative max-w-sm">
+          <Icons.Search
+            size={15}
+            className="absolute left-3 top-3 text-slate-400"
+          />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search reports…"
+            className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          />
+        </div>
+
+        {!groups.length && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-400">
+            No report matches "{q}".
+          </div>
+        )}
+
+        {groups.map((g) => {
+          const open = !closed[g.key];
+          return (
+            <section
+              key={g.key}
+              className="rounded-2xl border border-slate-200 bg-white shadow-sm"
+            >
+              <button
+                type="button"
+                onClick={() => setClosed((c) => ({ ...c, [g.key]: open }))}
+                className="flex w-full items-center justify-between px-5 py-4"
+              >
+                <span className="flex items-center gap-3 text-base font-bold text-slate-900">
+                  <span className={`h-5 w-1 rounded-full ${g.bar}`} />
+                  {g.label}
+                </span>
+                {open ? (
+                  <Icons.ChevronUp size={18} className="text-slate-400" />
+                ) : (
+                  <Icons.ChevronDown size={18} className="text-slate-400" />
+                )}
+              </button>
+              {open && (
+                <div className="grid gap-4 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-3">
+                  {g.cards.map((c) => {
+                    const Ic = Icons[c.icon] || Icons.FileText;
+                    return (
+                      <Link
+                        key={c.key}
+                        to={`/reports/${c.key}`}
+                        className="group rounded-2xl border border-slate-200 p-4 transition hover:border-blue-300 hover:shadow-md"
+                      >
+                        <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                          <Ic size={18} />
+                        </span>
+                        <div className="text-sm font-bold text-slate-900 group-hover:text-blue-700">
+                          {c.label}
+                        </div>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                          {c.desc}
+                        </p>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const RP_PAGE_SIZES = [10, 25, 50, 100];
+const RP_EMPTY = {
+  range: "all",
+  from: "",
+  to: "",
+  mode: "",
+  status: "",
+  wh: "",
+  customer: "",
+  tk: "",
+  container: "",
+  q: "",
+};
+
+const rpLc = (s) => String(s ?? "").toLowerCase();
+function rpDate(v) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+function rpAddDays(v, n) {
+  if (!v || n == null) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getTime() + n * SLA_DAY_MS).toISOString();
+}
+const rpDays = (n) => (n == null ? "—" : `${n} ${n === 1 ? "day" : "days"}`);
+function rpInRange(date, f) {
+  if (f.range === "all") return true;
+  const [a, b] = slaRangeBounds(f.range, f.from, f.to);
+  if (!a && !b) return true;
+  const t = date ? new Date(date).getTime() : NaN;
+  if (Number.isNaN(t)) return false;
+  return (!a || t >= a.getTime()) && (!b || t < b.getTime());
+}
+
+// ---- Column sets (v = raw value for sort/export, t = text, cell = JSX) ----
+const rpStatusCell = (fn) => (r) => <SlaBadge status={fn(r)} />;
+const RP_TK = {
+  key: "tk",
+  label: "Tracking Number",
+  v: (r) => r.tk,
+  cell: (r) => (
+    <Link
+      to={`/packages/${encodeURIComponent(r.tk)}`}
+      className="font-semibold text-blue-700 hover:underline"
+    >
+      {r.tk}
+    </Link>
+  ),
+};
+const rpDateCol = (key, label, get) => ({
+  key,
+  label,
+  v: get,
+  t: (r) => rpDate(get(r)),
+});
+const rpDaysCol = (key, label, get) => ({
+  key,
+  label,
+  v: get,
+  t: (r) => rpDays(get(r)),
+});
+
+function rpColumns(key) {
+  const customer = { key: "customer", label: "Customer", v: (r) => r.customer };
+  const mode = {
+    key: "mode",
+    label: "Transport Mode",
+    v: (r) => r.mode || "—",
+  };
+  switch (key) {
+    case "transit":
+      return [
+        RP_TK,
+        customer,
+        mode,
+        rpDateCol("start", "Start Date", (r) => r.outboundAt),
+        rpDateCol(
+          "end",
+          "Arrival / Current",
+          (r) => r.arrivedAt || r.completedAt,
+        ),
+        rpDaysCol("exp", "Expected Days", (r) => r.sla.transit?.expectedDays),
+        rpDaysCol("act", "Actual Days", (r) => r.sla.transit?.elapsedDays),
+        rpDaysCol("delay", "Delay Days", (r) => r.sla.transit?.delayDays),
+        {
+          key: "status",
+          label: "Status",
+          v: (r) => r.sla.transit?.status,
+          cell: rpStatusCell((r) => r.sla.transit?.status),
+        },
+      ];
+    case "late":
+      return [
+        RP_TK,
+        customer,
+        mode,
+        { key: "origin", label: "Origin", v: (r) => r.origin },
+        { key: "dest", label: "Destination", v: (r) => r.destination },
+        rpDateCol("start", "Start Date", (r) => r.outboundAt),
+        rpDateCol("expArr", "Expected Arrival", (r) => r.expectedArrival),
+        rpDateCol("actArr", "Actual Arrival", (r) => r.arrivedAt),
+        rpDaysCol("exp", "Expected Days", (r) => r.sla.transit?.expectedDays),
+        rpDaysCol("act", "Actual Days", (r) => r.sla.transit?.elapsedDays),
+        rpDaysCol("delay", "Delay Days", (r) => r.sla.transit?.delayDays),
+        rpDateCol("last", "Last Update", (r) => r.lastUpdatedAt),
+        {
+          key: "status",
+          label: "Status",
+          v: (r) => r.sla.transit?.status,
+          cell: rpStatusCell((r) => r.sla.transit?.status),
+        },
+      ];
+    case "warehouse":
+      return [
+        RP_TK,
+        { key: "wh", label: "Warehouse", v: (r) => r.sla.warehouse?.warehouse },
+        rpDateCol("recv", "Received Date", (r) => r.sla.warehouse?.receivedAt),
+        rpDateCol("last", "Last Update", (r) => r.sla.warehouse?.lastUpdatedAt),
+        rpDaysCol(
+          "dwu",
+          "Days Without Update",
+          (r) => r.sla.warehouse?.daysWithoutUpdate,
+        ),
+        rpDaysCol(
+          "allowed",
+          "Allowed Days",
+          (r) => r.sla.warehouse?.allowedDays,
+        ),
+        rpDaysCol("delay", "Delay Days", (r) => r.sla.warehouse?.delayDays),
+        {
+          key: "status",
+          label: "Status",
+          v: (r) => r.sla.warehouse?.status,
+          cell: rpStatusCell((r) => r.sla.warehouse?.status),
+        },
+      ];
+    case "sla":
+      return [
+        RP_TK,
+        customer,
+        mode,
+        rpDaysCol("exp", "Expected Days", (r) => r.sla.transit?.expectedDays),
+        rpDaysCol("act", "Actual Days", (r) => r.sla.transit?.elapsedDays),
+        {
+          key: "tsla",
+          label: "Transit SLA",
+          v: (r) => r.sla.transit?.status || "—",
+          cell: (r) =>
+            r.sla.transit ? <SlaBadge status={r.sla.transit.status} /> : "—",
+        },
+        {
+          key: "wh",
+          label: "Warehouse",
+          v: (r) => r.sla.warehouse?.warehouse || "—",
+        },
+        rpDaysCol(
+          "dwu",
+          "Days Without Update",
+          (r) => r.sla.warehouse?.daysWithoutUpdate,
+        ),
+        {
+          key: "wsla",
+          label: "Warehouse SLA",
+          v: (r) => r.sla.warehouse?.status || "—",
+          cell: (r) =>
+            r.sla.warehouse ? (
+              <SlaBadge status={r.sla.warehouse.status} />
+            ) : (
+              "—"
+            ),
+        },
+        {
+          key: "completedLate",
+          label: "Completed Late",
+          v: (r) => (r.sla.completedLate ? "Yes" : "No"),
+        },
+        {
+          key: "status",
+          label: "Overall",
+          v: (r) => r.sla.overall,
+          cell: rpStatusCell((r) => r.sla.overall),
+        },
+      ];
+    case "transport":
+      return [
+        { key: "mode", label: "Transport", v: (r) => r.mode },
+        { key: "total", label: "Total", v: (r) => r.total },
+        { key: "onTime", label: "On Time", v: (r) => r.onTime },
+        { key: "warning", label: "Warning", v: (r) => r.warning },
+        { key: "late", label: "Late", v: (r) => r.late },
+        { key: "noUpdate", label: "No Update", v: (r) => r.noUpdate },
+        { key: "completed", label: "Completed", v: (r) => r.completed },
+        { key: "avg", label: "Avg Transit Days", v: (r) => r.avgDays },
+        {
+          key: "pct",
+          label: "On-Time %",
+          v: (r) => r.pct,
+          t: (r) => `${r.pct}%`,
+        },
+      ];
+    case "container":
+      return [
+        { key: "no", label: "Container No", v: (r) => r.no },
+        { key: "seal", label: "Seal No", v: (r) => r.seal || "—" },
+        { key: "mode", label: "Transport", v: (r) => r.mode || "—" },
+        { key: "origin", label: "Origin", v: (r) => r.origin || "—" },
+        { key: "dest", label: "Destination", v: (r) => r.dest || "—" },
+        rpDateCol("dep", "Departure", (r) => r.departure),
+        rpDateCol("eta", "ETA", (r) => r.eta),
+        { key: "tks", label: "TKs", v: (r) => r.tkCount },
+        { key: "customers", label: "Customers", v: (r) => r.customerNames },
+        { key: "status", label: "Status", v: (r) => r.status || "—" },
+      ];
+    default: // shipment
+      return [
+        RP_TK,
+        customer,
+        mode,
+        { key: "container", label: "Container", v: (r) => r.container || "—" },
+        { key: "wh", label: "Warehouse", v: (r) => r.warehouse || "—" },
+        { key: "pkgStatus", label: "Shipment Status", v: (r) => r.pkgStatus },
+        rpDateCol("created", "Created", (r) => r.createdAt),
+        rpDateCol("last", "Last Update", (r) => r.lastUpdatedAt),
+        {
+          key: "status",
+          label: "SLA",
+          v: (r) => r.sla.overall,
+          cell: rpStatusCell((r) => r.sla.overall),
+        },
+      ];
+  }
+}
+
+// Which rows belong to a report, and which status the Status filter reads.
+const RP_RULES = {
+  shipment: { where: () => true, statusOf: (r) => r.sla.overall },
+  transit: {
+    where: (r) => !!r.sla.transit,
+    statusOf: (r) => r.sla.transit?.status,
+  },
+  late: {
+    where: (r) => r.sla.transit?.status === SLA_STATUS.LATE,
+    statusOf: (r) => r.sla.transit?.status,
+  },
+  warehouse: {
+    where: (r) =>
+      !!r.sla.warehouse && r.sla.warehouse.status !== SLA_STATUS.ON_TIME,
+    statusOf: (r) => r.sla.warehouse?.status,
+  },
+  transport: { where: () => true, statusOf: (r) => r.sla.overall },
+  sla: { where: () => true, statusOf: (r) => r.sla.overall },
+};
+
+// ---- Export ----
+function rpCellText(col, r) {
+  const x = col.t ? col.t(r) : col.v(r);
+  return x == null || x === "" ? "" : String(x);
+}
+function rpExportCsv(cols, rows, base) {
+  const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
+  const lines = [
+    cols.map((c) => q(c.label)).join(","),
+    ...rows.map((r) => cols.map((c) => q(rpCellText(c, r))).join(",")),
+  ];
+  downloadBlob(
+    `${base}.csv`,
+    new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }),
+  );
+}
+function rpExportXls(cols, rows, base) {
+  const head = cols.map((c) => `<th>${htmlEsc(c.label)}</th>`).join("");
+  const body = rows
+    .map(
+      (r) =>
+        `<tr>${cols.map((c) => `<td>${htmlEsc(rpCellText(c, r))}</td>`).join("")}</tr>`,
+    )
+    .join("");
+  downloadBlob(
+    `${base}.xls`,
+    new Blob(
+      [
+        `\uFEFF<html><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`,
+      ],
+      { type: "application/vnd.ms-excel;charset=utf-8" },
+    ),
+  );
+}
+
+// ---- Table: sort + pagination + export ----
+function ReportTable({ tab, cols, rows, loading }) {
+  const [sort, setSort] = useState({ k: null, dir: 1 });
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(25);
+
+  const sorted = useMemo(() => {
+    const c = cols.find((x) => x.key === sort.k);
+    if (!c) return rows;
+    return [...rows].sort((a, b) => {
+      const x = c.v(a);
+      const y = c.v(b);
+      if (x == null && y == null) return 0;
+      if (x == null) return 1;
+      if (y == null) return -1;
+      if (typeof x === "number" && typeof y === "number")
+        return (x - y) * sort.dir;
+      return (
+        String(x).localeCompare(String(y), undefined, { numeric: true }) *
+        sort.dir
+      );
+    });
+  }, [rows, cols, sort]);
+
+  const pages = Math.max(1, Math.ceil(sorted.length / size));
+  const cur = Math.min(page, pages);
+  const slice = sorted.slice((cur - 1) * size, cur * size);
+  useEffect(() => setPage(1), [rows, size]);
+
+  const base = `${tab.key}-report-${new Date().toISOString().slice(0, 10)}`;
+  const btn =
+    "inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40";
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <div className="text-sm font-bold text-slate-900">
+          {tab.label}
+          <span className="ml-2 text-xs font-semibold text-slate-400">
+            {sorted.length} record{sorted.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className={btn}
+            disabled={!sorted.length}
+            onClick={() => rpExportCsv(cols, sorted, base)}
+          >
+            <Icons.Download size={14} /> CSV
+          </button>
+          <button
+            type="button"
+            className={btn}
+            disabled={!sorted.length}
+            onClick={() => rpExportXls(cols, sorted, base)}
+          >
+            <Icons.FileSpreadsheet size={14} /> Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[820px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              {cols.map((c) => (
+                <th
+                  key={c.key}
+                  className="whitespace-nowrap px-4 py-3 font-bold"
+                >
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 uppercase hover:text-slate-900"
+                    onClick={() =>
+                      setSort((s) =>
+                        s.k === c.key
+                          ? { k: c.key, dir: -s.dir }
+                          : { k: c.key, dir: 1 },
+                      )
+                    }
+                  >
+                    {c.label}
+                    {sort.k === c.key ? (
+                      sort.dir === 1 ? (
+                        <Icons.ChevronUp size={13} />
+                      ) : (
+                        <Icons.ChevronDown size={13} />
+                      )
+                    ) : (
+                      <Icons.ArrowUpDown size={12} className="opacity-40" />
+                    )}
+                  </button>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td
+                  colSpan={cols.length}
+                  className="px-4 py-10 text-center text-slate-400"
+                >
+                  Loading…
+                </td>
+              </tr>
+            ) : !slice.length ? (
+              <tr>
+                <td
+                  colSpan={cols.length}
+                  className="px-4 py-10 text-center text-slate-400"
+                >
+                  No records match the current filters.
+                </td>
+              </tr>
+            ) : (
+              slice.map((r, i) => (
+                <tr
+                  key={r.tk || r.no || r.mode || i}
+                  className="hover:bg-slate-50/60"
+                >
+                  {cols.map((c) => (
+                    <td
+                      key={c.key}
+                      className="whitespace-nowrap px-4 py-3 text-slate-700"
+                    >
+                      {c.cell ? c.cell(r) : rpCellText(c, r) || "—"}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+        <label className="flex items-center gap-2">
+          Rows per page
+          <select
+            value={size}
+            onChange={(e) => setSize(Number(e.target.value))}
+            className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs"
+          >
+            {RP_PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className={btn}
+            disabled={cur <= 1}
+            onClick={() => setPage(cur - 1)}
+          >
+            <Icons.ChevronLeft size={14} /> Prev
+          </button>
+          <span className="font-semibold">
+            Page {cur} / {pages}
+          </span>
+          <button
+            type="button"
+            className={btn}
+            disabled={cur >= pages}
+            onClick={() => setPage(cur + 1)}
+          >
+            Next <Icons.ChevronRight size={14} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Shipment-based reports (1–5, 7) ----
+function ShipmentReportBody({ tab, f }) {
+  const { rows: slaRows, loading } = useSlaRows();
+  const { packages } = usePackageTracking();
+  const { transport } = useSlaRules();
+
+  const base = useMemo(() => {
+    const pkgBy = new Map(packages.map((p) => [String(p.tk), p]));
+    return slaRows.map((r) => {
+      const p = pkgBy.get(String(r.tk)) || {};
+      const t = r.sla.transit;
+      const whCodes = [
+        p.origin_wh_code,
+        p.dest_wh_code,
+        p.dest_branch_code,
+        p.warehouse,
+      ].filter(Boolean);
+      return {
+        ...r,
+        pkgStatus: p.status || "—",
+        container:
+          p.container_no && p.container_no !== "—" ? p.container_no : "",
+        whCodes,
+        warehouse:
+          r.sla.warehouse?.warehouse || p.origin_wh_code || p.warehouse || "",
+        origin: p.origin_wh_code || p.warehouse || "China",
+        destination: p.dest_branch_code || p.dest_wh_code || "Cambodia",
+        expectedArrival:
+          t && r.outboundAt ? rpAddDays(r.outboundAt, t.expectedDays) : null,
+        dateAt: r.createdAt || r.receivedAt || r.outboundAt,
+      };
+    });
+  }, [slaRows, packages]);
+
+  const rule = RP_RULES[tab.key] || RP_RULES.shipment;
+  const filtered = useMemo(() => {
+    const q = rpLc(f.q);
+    return base.filter((r) => {
+      if (!rule.where(r)) return false;
+      if (!rpInRange(r.dateAt, f)) return false;
+      if (f.mode && rpLc(r.mode) !== rpLc(f.mode)) return false;
+      if (f.status && rule.statusOf(r) !== f.status) return false;
+      if (f.wh && !r.whCodes.some((c) => rpLc(c) === rpLc(f.wh))) return false;
+      if (f.customer && !rpLc(r.customer).includes(rpLc(f.customer)))
+        return false;
+      if (f.tk && !rpLc(r.tk).includes(rpLc(f.tk))) return false;
+      if (f.container && !rpLc(r.container).includes(rpLc(f.container)))
+        return false;
+      if (
+        q &&
+        !rpLc(
+          [
+            r.tk,
+            r.customer,
+            r.mode,
+            r.container,
+            r.warehouse,
+            r.pkgStatus,
+            r.sla.overall,
+          ].join(" "),
+        ).includes(q)
+      )
+        return false;
+      return true;
+    });
+  }, [base, f, rule]);
+
+  const data = useMemo(() => {
+    if (tab.key !== "transport") return filtered;
+    const modes = new Set(transport.map((x) => x.mode));
+    filtered.forEach((r) => modes.add(r.mode || "Unknown"));
+    return [...modes].map((m) => {
+      const rs = filtered.filter((r) => (r.mode || "Unknown") === m);
+      const c = (s) => rs.filter((r) => r.sla.overall === s).length;
+      const days = rs
+        .map((r) => r.sla.transit?.elapsedDays)
+        .filter((x) => x != null);
+      const ok = c(SLA_STATUS.ON_TIME) + c(SLA_STATUS.COMPLETED);
+      return {
+        mode: m,
+        total: rs.length,
+        onTime: c(SLA_STATUS.ON_TIME),
+        warning: c(SLA_STATUS.WARNING),
+        late: c(SLA_STATUS.LATE),
+        noUpdate: c(SLA_STATUS.NO_UPDATE),
+        completed: c(SLA_STATUS.COMPLETED),
+        avgDays: days.length
+          ? Math.round((days.reduce((a, b) => a + b, 0) / days.length) * 10) /
+            10
+          : null,
+        pct: rs.length ? Math.round((ok / rs.length) * 100) : 0,
+      };
+    });
+  }, [filtered, tab.key, transport]);
+
+  const cols = useMemo(() => rpColumns(tab.key), [tab.key]);
+  return <ReportTable tab={tab} cols={cols} rows={data} loading={loading} />;
+}
+
+// ---- Container report (own data source) ----
+function ContainerReportBody({ tab, f }) {
+  const { containers, activeItems, loading } = useContainerStore();
+  const { packages } = usePackageTracking();
+
+  const rows = useMemo(() => {
+    const custBy = new Map(
+      packages.map((p) => [tkKey(p.tk), p.customer || ""]),
+    );
+    const itemsBy = new Map();
+    (activeItems || []).forEach((i) => {
+      if (!itemsBy.has(i.container_id)) itemsBy.set(i.container_id, []);
+      itemsBy.get(i.container_id).push(i.tk);
+    });
+    return (containers || []).map((c) => {
+      const tks = itemsBy.get(c.id) || [];
+      const customers = [
+        ...new Set(tks.map((t) => custBy.get(tkKey(t))).filter(Boolean)),
+      ];
+      return {
+        id: c.id,
+        no: c.container_number || "",
+        seal: c.seal_number || "",
+        mode: c.transport || c.transport_mode || c.method || "",
+        origin: c.origin_wh_code || "",
+        dest: c.dest_wh_code || c.destination || "",
+        departure: c.departed_at || c.departure_date || null,
+        eta: c.eta || null,
+        status: c.status || "",
+        tkCount: tks.length,
+        tks,
+        customers,
+        customerNames: customers.join(", "),
+        dateAt: c.departed_at || c.departure_date || c.created_at || null,
+      };
+    });
+  }, [containers, activeItems, packages]);
+
+  const filtered = useMemo(() => {
+    const q = rpLc(f.q);
+    return rows.filter((r) => {
+      if (!rpInRange(r.dateAt, f)) return false;
+      if (f.mode && rpLc(r.mode) !== rpLc(f.mode)) return false;
+      if (f.status && rpLc(r.status) !== rpLc(f.status)) return false;
+      if (f.wh && ![r.origin, r.dest].some((c) => rpLc(c) === rpLc(f.wh)))
+        return false;
+      if (f.customer && !rpLc(r.customerNames).includes(rpLc(f.customer)))
+        return false;
+      if (f.tk && !r.tks.some((t) => rpLc(t).includes(rpLc(f.tk))))
+        return false;
+      if (f.container && !rpLc(r.no).includes(rpLc(f.container))) return false;
+      if (
+        q &&
+        !rpLc(
+          [
+            r.no,
+            r.seal,
+            r.mode,
+            r.origin,
+            r.dest,
+            r.status,
+            r.customerNames,
+          ].join(" "),
+        ).includes(q)
+      )
+        return false;
+      return true;
+    });
+  }, [rows, f]);
+
+  const cols = useMemo(() => rpColumns("container"), []);
+  return (
+    <ReportTable tab={tab} cols={cols} rows={filtered} loading={loading} />
+  );
+}
+
+// ---- Page ----
+function ReportsPage() {
+  const { key } = useParams();
+  const navigate = useNavigate();
+  const { transport } = useSlaRules();
+  const { rows: whRows } = useWarehouses();
+  const [f, setF] = useState(RP_EMPTY);
+  const tab = REPORT_TABS.find((t) => t.key === key);
+  if (!tab) return <Navigate to="/reports/shipment" replace />;
+
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const field =
+    "h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+  const lbl =
+    "block text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1";
+  const statusOptions =
+    key === "container"
+      ? [...CONTAINER_STATUS_LIST, "Cancelled"]
+      : Object.values(SLA_STATUS);
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[1400px] space-y-5 p-5 md:p-7">
+        <div>
+          <Link
+            to="/reports"
+            className="mb-2 inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+          >
+            <Icons.ChevronLeft size={14} /> Reports &amp; Analytics
+          </Link>
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+            {tab.label}
+          </h1>
+          <p className="text-sm text-slate-500">
+            SLA, transit and warehouse performance — all days come from
+            Settings.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {REPORT_TABS.map((t) => {
+            const Ic = Icons[t.icon] || Icons.FileText;
+            const on = t.key === key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => navigate(`/reports/${t.key}`)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition ${on ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+              >
+                <Ic size={14} /> {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="sm:col-span-2">
+              <label className={lbl}>Search</label>
+              <div className="relative">
+                <Icons.Search
+                  size={15}
+                  className="absolute left-3 top-3 text-slate-400"
+                />
+                <input
+                  className={`${field} pl-9`}
+                  placeholder="Tracking, customer, container…"
+                  value={f.q}
+                  onChange={set("q")}
+                />
+              </div>
+            </div>
+            <div>
+              <label className={lbl}>Date range</label>
+              <select className={field} value={f.range} onChange={set("range")}>
+                <option value="all">All time</option>
+                {SLA_RANGES.map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={lbl}>Transport mode</label>
+              <select className={field} value={f.mode} onChange={set("mode")}>
+                <option value="">All modes</option>
+                {transport.map((r) => (
+                  <option key={r.id || r.mode} value={r.mode}>
+                    {r.mode}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {f.range === "custom" && (
+              <>
+                <div>
+                  <label className={lbl}>From</label>
+                  <input
+                    type="date"
+                    className={field}
+                    value={f.from}
+                    onChange={set("from")}
+                  />
+                </div>
+                <div>
+                  <label className={lbl}>To</label>
+                  <input
+                    type="date"
+                    className={field}
+                    value={f.to}
+                    onChange={set("to")}
+                  />
+                </div>
+              </>
+            )}
+            <div>
+              <label className={lbl}>Status</label>
+              <select
+                className={field}
+                value={f.status}
+                onChange={set("status")}
+              >
+                <option value="">All statuses</option>
+                {statusOptions.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={lbl}>Warehouse</label>
+              <select className={field} value={f.wh} onChange={set("wh")}>
+                <option value="">All warehouses</option>
+                {(whRows || []).map((w) => (
+                  <option key={w.code} value={w.code}>
+                    {w.name ? `${w.code} · ${w.name}` : w.code}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={lbl}>Customer</label>
+              <input
+                className={field}
+                value={f.customer}
+                onChange={set("customer")}
+                placeholder="Name or code"
+              />
+            </div>
+            <div>
+              <label className={lbl}>Tracking number</label>
+              <input className={field} value={f.tk} onChange={set("tk")} />
+            </div>
+            <div>
+              <label className={lbl}>Container number</label>
+              <input
+                className={field}
+                value={f.container}
+                onChange={set("container")}
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => setF(RP_EMPTY)}
+                className="h-10 rounded-xl border border-slate-200 px-4 text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Reset filters
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {key === "container" ? (
+          <ContainerReportBody tab={tab} f={f} />
+        ) : (
+          <ShipmentReportBody key={key} tab={tab} f={f} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CUSTOMER DETAIL PAGE — /customers/:code
+// Summary header + tabs (Packages-TK / Addresses) so the page
+// never dumps everything at once. Right column = separate small cards.
+// ============================================================
+const CD_PAGE = 10;
+const cdDate = (v) => {
+  if (!v) return "—";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : d.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+};
+const cdAgo = (v) => {
+  const t = v ? new Date(v).getTime() : NaN;
+  if (Number.isNaN(t)) return "";
+  const d = Math.floor((Date.now() - t) / 86400000);
+  return d <= 0
+    ? "today"
+    : d < 30
+      ? `${d}d ago`
+      : `${Math.floor(d / 30)}mo ago`;
+};
+const cdAddr = (a) =>
+  [a.address, a.commune, a.district, a.province].filter(Boolean).join(", ");
+
+function CdCard({ title, icon, children }) {
+  const Ic = Icons[icon] || Icons.Info;
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-slate-900">
+        <Ic size={15} className="text-slate-400" /> {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+const CdRow = ({ label, value }) => (
+  <div className="flex items-start justify-between gap-4 py-1.5 text-sm">
+    <span className="text-slate-500">{label}</span>
+    <span className="text-right font-semibold text-slate-800">
+      {value || "—"}
+    </span>
+  </div>
+);
+const CdStat = ({ label, value, tone = "text-slate-900" }) => (
+  <div className="min-w-[88px] border-l border-slate-200 pl-5 first:border-0 first:pl-0">
+    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+      {label}
+    </div>
+    <div className={`mt-0.5 text-xl font-extrabold ${tone}`}>{value}</div>
+  </div>
+);
+
+function CdTable({ cols, rows, empty, loading, stages }) {
+  const [q, setQ] = useState("");
+  const [stage, setStage] = useState("");
+  const [page, setPage] = useState(1);
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const base = stage ? rows.filter((r) => r.status === stage) : rows;
+    if (!s) return base;
+    return base.filter((r) =>
+      cols.some((c) =>
+        String(c.search ? c.search(r) : (r[c.key] ?? ""))
+          .toLowerCase()
+          .includes(s),
+      ),
+    );
+  }, [rows, q, cols, stage]);
+  useEffect(() => setPage(1), [q, rows, stage]);
+  const pages = Math.max(1, Math.ceil(filtered.length / CD_PAGE));
+  const cur = Math.min(page, pages);
+  const slice = filtered.slice((cur - 1) * CD_PAGE, cur * CD_PAGE);
+  const btn =
+    "inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40";
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 p-3">
+        <div className="relative max-w-xs">
+          <Icons.Search
+            size={14}
+            className="absolute left-3 top-2.5 text-slate-400"
+          />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search…"
+            className="h-9 w-full rounded-xl border border-slate-200 pl-8 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          />
+        </div>
+        {stages && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {[
+              ["", "All", rows.length],
+              ...stages.map((s) => [
+                s,
+                s,
+                rows.filter((r) => r.status === s).length,
+              ]),
+            ].map(([k, label, n]) => (
+              <button
+                key={k || "all"}
+                type="button"
+                onClick={() => setStage(k)}
+                className={`rounded-full border px-3 py-1 text-xs font-bold transition ${stage === k ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+              >
+                {label} <span className="opacity-70">{n}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+            <tr>
+              {cols.map((c) => (
+                <th
+                  key={c.key}
+                  className="whitespace-nowrap px-4 py-3 font-bold"
+                >
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td
+                  colSpan={cols.length}
+                  className="px-4 py-10 text-center text-slate-400"
+                >
+                  Loading…
+                </td>
+              </tr>
+            ) : !slice.length ? (
+              <tr>
+                <td
+                  colSpan={cols.length}
+                  className="px-4 py-10 text-center text-slate-400"
+                >
+                  {empty}
+                </td>
+              </tr>
+            ) : (
+              slice.map((r, i) => (
+                <tr key={r.id || r.tk || i} className="hover:bg-slate-50/60">
+                  {cols.map((c) => (
+                    <td
+                      key={c.key}
+                      className="whitespace-nowrap px-4 py-3 text-slate-700"
+                    >
+                      {c.render ? c.render(r) : (r[c.key] ?? "—")}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+        <span>
+          {filtered.length} record{filtered.length === 1 ? "" : "s"}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className={btn}
+            disabled={cur <= 1}
+            onClick={() => setPage(cur - 1)}
+          >
+            <Icons.ChevronLeft size={13} /> Prev
+          </button>
+          <span className="font-semibold">
+            {cur} / {pages}
+          </span>
+          <button
+            type="button"
+            className={btn}
+            disabled={cur >= pages}
+            onClick={() => setPage(cur + 1)}
+          >
+            Next <Icons.ChevronRight size={13} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerDetailPage() {
+  const { code } = useParams();
+  const navigate = useNavigate();
+  const { rows: whRows } = useWarehouses();
+  const [tab, setTab] = useState("packages");
+  const [state, setState] = useState({
+    loading: true,
+    cust: null,
+    packages: [],
+    addrs: [],
+    error: "",
+  });
+
+  useEffect(() => {
+    let alive = true;
+    setState((s) => ({ ...s, loading: true, error: "" }));
+    if (!supabase) {
+      setState({
+        loading: false,
+        cust: null,
+        packages: [],
+        addrs: [],
+        error: "Supabase is not configured.",
+      });
+      return;
+    }
+    (async () => {
+      const { data: cust, error } = await supabase
+        .from("customers")
+        .select("*")
+        .eq("customer_code", code)
+        .maybeSingle();
+      if (!alive) return;
+      if (error || !cust) {
+        setState({
+          loading: false,
+          cust: null,
+          packages: [],
+          addrs: [],
+          error: error?.message || "",
+        });
+        return;
+      }
+      const [p, a] = await Promise.all([
+        supabase
+          .from("packages")
+          .select("*")
+          .eq("customer_id", cust.id)
+          .order("created_at", { ascending: false })
+          .limit(2000),
+        supabase
+          .from("customer_addresses")
+          .select("*")
+          .eq("customer_id", cust.id)
+          .order("is_default", { ascending: false }),
+      ]);
+      if (!alive) return;
+      setState({
+        loading: false,
+        cust,
+        packages: p.data || [],
+        addrs: a.data || [],
+        error: "",
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [code]);
+
+  const { loading, cust, packages, addrs, error } = state;
+
+  if (!loading && !cust) {
+    return (
+      <div className="p-7">
+        <button
+          type="button"
+          onClick={() => navigate("/customers")}
+          className="mb-4 inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+        >
+          <Icons.ChevronLeft size={14} /> Customers
+        </button>
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+          Customer {code} not found.{error ? ` (${error})` : ""}
+        </div>
+      </div>
+    );
+  }
+  if (loading) {
+    return <div className="p-7 text-sm text-slate-400">Loading customer…</div>;
+  }
+
+  const done = packages.filter((p) => p.status === "Completed").length;
+  const active = packages.length - done;
+  const defAddr = addrs.find((a) => a.is_default) || addrs[0];
+  const whLabel = (c) =>
+    c
+      ? (whRows || []).find((w) => w.code === c)?.name
+        ? `${c} · ${(whRows || []).find((w) => w.code === c).name}`
+        : c
+      : "—";
+  const isActive =
+    !cust.status || String(cust.status).toLowerCase() === "active";
+
+  const pkgCols = [
+    {
+      key: "updated",
+      label: "Last Update",
+      search: () => "",
+      render: (r) => (
+        <div>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.updated_at || r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cdAgo(r.updated_at || r.created_at)}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "tk",
+      label: "Tracking Number",
+      render: (r) => (
+        <Link
+          to={`/packages/${encodeURIComponent(r.tk)}`}
+          className="font-semibold text-blue-700 hover:underline"
+        >
+          {r.tk}
+        </Link>
+      ),
+    },
+    {
+      key: "container_no",
+      label: "Container",
+      render: (r) => r.container_no || "—",
+    },
+    {
+      key: "route",
+      label: "Route",
+      search: (r) => `${r.origin_wh_code} ${r.dest_branch_code}`,
+      render: (r) =>
+        `${r.origin_wh_code || "—"} → ${r.dest_branch_code || "—"}`,
+    },
+    {
+      key: "fee",
+      label: "Freight",
+      search: () => "",
+      render: (r) =>
+        r.freight_fee != null && r.freight_fee !== ""
+          ? money(r.freight_fee)
+          : "—",
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (r) => <StatusBadge label={r.status || "—"} />,
+    },
+  ];
+  const addrCols = [
+    {
+      key: "address",
+      label: "Address",
+      search: (r) => cdAddr(r),
+      render: (r) => cdAddr(r) || "—",
+    },
+    {
+      key: "default",
+      label: "",
+      search: () => "",
+      render: (r) =>
+        r.is_default ? (
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
+            Primary
+          </span>
+        ) : null,
+    },
+  ];
+
+  const tabs = [
+    ["packages", "Packages / TK", packages.length],
+    ["addresses", "Addresses", addrs.length],
+  ];
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[1300px] space-y-5 p-5 md:p-7">
+        <button
+          type="button"
+          onClick={() => navigate("/customers")}
+          className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+        >
+          <Icons.ChevronLeft size={14} /> Customers
+        </button>
+
+        {/* Summary header */}
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-lg font-bold text-white">
+              {(cust.name || "?").slice(0, 1).toUpperCase()}
+            </div>
+            <div>
+              <div className="text-xs text-slate-400">{cust.customer_code}</div>
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-extrabold text-slate-900">
+                  {cust.name || "—"}
+                </span>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
+                >
+                  {isActive ? "Active" : cust.status}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-5">
+            <CdStat
+              label="Total TK"
+              value={packages.length}
+              tone="text-blue-700"
+            />
+            <CdStat label="In Progress" value={active} tone="text-amber-600" />
+            <CdStat label="Completed" value={done} tone="text-emerald-600" />
+          </div>
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+          {/* Main: tabs */}
+          <div className="space-y-3">
+            <div className="flex gap-1 border-b border-slate-200">
+              {tabs.map(([k, label, n]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setTab(k)}
+                  className={`-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-bold transition ${tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+                >
+                  {label}
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] ${tab === k ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500"}`}
+                  >
+                    {n}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {tab === "packages" && (
+              <CdTable
+                cols={pkgCols}
+                rows={packages}
+                stages={PACKAGE_STAGES}
+                empty="No packages yet."
+              />
+            )}
+            {tab === "addresses" && (
+              <CdTable
+                cols={addrCols}
+                rows={addrs}
+                empty="No saved addresses."
+              />
+            )}
+          </div>
+
+          {/* Side: separate cards */}
+          <div className="space-y-4">
+            <CdCard title="Customer Details" icon="User">
+              <CdRow label="Customer ID" value={cust.customer_code} />
+              <CdRow label="Registered" value={cdDate(cust.created_at)} />
+              <CdRow label="Status" value={isActive ? "Active" : cust.status} />
+            </CdCard>
+            <CdCard title="Contact Information" icon="Phone">
+              <CdRow label="Phone" value={cust.phone} />
+              <CdRow label="Email" value={cust.email} />
+            </CdCard>
+            <CdCard title="Warehouse Route" icon="Warehouse">
+              <CdRow
+                label="China Warehouse"
+                value={whLabel(cust.default_china_wh || cust.warehouse)}
+              />
+              <CdRow
+                label="Cambodia Branch"
+                value={whLabel(cust.default_kh_branch)}
+              />
+            </CdCard>
+            <CdCard title="Primary Address" icon="MapPin">
+              {defAddr ? (
+                <p className="text-sm leading-relaxed text-slate-700">
+                  {cdAddr(defAddr)}
+                </p>
+              ) : (
+                <p className="text-sm text-slate-400">No address saved.</p>
+              )}
+              {addrs.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setTab("addresses")}
+                  className="mt-2 text-xs font-bold text-blue-600 hover:underline"
+                >
+                  View all {addrs.length} addresses
+                </button>
+              )}
+            </CdCard>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminApp() {
   return (
     <PackageTrackingProvider>
@@ -25504,6 +29191,10 @@ function AdminApp() {
           <Route path="/kh-warehouse" element={<KhWarehousePage />} />
           <Route path="/roles" element={<RoleManagementPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/reports" element={<ReportsHubPage />} />
+          <Route path="/customers/:code" element={<CustomerDetailPage />} />
+          <Route path="/reports/:key" element={<ReportsPage />} />
+          <Route path="/notifications" element={<NotificationCenterPage />} />
           <Route
             path="/permissions"
             element={<Navigate to="/roles" replace />}
