@@ -2198,6 +2198,13 @@ function money(n) {
   return Number.isFinite(v) ? `$${v.toFixed(2)}` : "—";
 }
 
+// Like money(), but a negative balance reads "−$5.00" instead of "$-5.00".
+function moneyS(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return v < 0 ? `−$${Math.abs(v).toFixed(2)}` : `$${v.toFixed(2)}`;
+}
+
 function sizeLabel(size) {
   if (!size) return "—";
   return size === "OVER" ? "Dimension Based (> L)" : size;
@@ -20736,7 +20743,10 @@ const CustomerApp = (() => {
       if (error || !data) return;
       setWallet({
         balance: Number(data.balance) || 0,
-        tx: Array.isArray(data.transactions) ? data.transactions : [],
+        // reversals are admin-only: never show them (or the top-ups they cancel)
+        tx: (Array.isArray(data.transactions) ? data.transactions : []).filter(
+          (t) => t.type !== "top_up_reversal" && !t.reversed_at,
+        ),
       });
     };
     const refreshMoney = () => Promise.all([loadShips(), loadWallet()]);
@@ -21354,7 +21364,11 @@ const CustomerApp = (() => {
                 <Icon i={Wallet} c="bg-emerald-50 text-emerald-600" />
                 <div className="flex-1">
                   <p className="text-xs text-slate-500">My Wallet</p>
-                  <b className="text-xl">{money(wallet.balance)}</b>
+                  <b
+                    className={`text-xl ${wallet.balance < 0 ? "text-red-600" : ""}`}
+                  >
+                    {moneyS(wallet.balance)}
+                  </b>
                 </div>
                 <ChevronRight size={18} className="text-slate-300" />
               </Card>
@@ -21560,7 +21574,9 @@ const CustomerApp = (() => {
                   </div>
                   <div className="flex justify-between text-sm py-1">
                     <span className="text-slate-500">My wallet</span>
-                    <b>{money(wallet.balance)}</b>
+                    <b className={wallet.balance < 0 ? "text-red-600" : ""}>
+                      {moneyS(wallet.balance)}
+                    </b>
                   </div>
                   {wallet.balance < s.fee.due ? (
                     <p className="mt-3 rounded-xl bg-amber-50 text-amber-700 text-xs px-3 py-2.5">
@@ -21627,9 +21643,19 @@ const CustomerApp = (() => {
       refreshMoney();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+    // Running balance is rebuilt from the CURRENT balance, walking back through
+    // only the rows the customer can see — so it always adds up on screen,
+    // even when admin-only reversals are hidden.
+    const rows = useMemo(() => {
+      let run = wallet.balance;
+      return wallet.tx.map((t) => {
+        const after = Math.round(run * 100) / 100;
+        run -= Number(t.amount) || 0;
+        return { ...t, _after: after };
+      });
+    }, [wallet]);
     const label = {
       top_up: "Top up",
-      top_up_reversal: "Top up reversed",
       shipping_payment: "Shipping payment",
       shipping_payment_cash: "Shipping paid (cash)",
     };
@@ -21640,12 +21666,19 @@ const CustomerApp = (() => {
           <Card className="p-5 bg-gradient-to-br from-blue-600 to-blue-700 text-white">
             <p className="text-sm text-blue-100">Available balance</p>
             <p className="text-3xl font-extrabold mt-1">
-              {money(wallet.balance)}
+              {moneyS(wallet.balance)}
             </p>
           </Card>
+          {wallet.balance < 0 && (
+            <p className="rounded-xl bg-red-50 text-red-700 text-xs font-semibold px-3 py-2.5">
+              Your balance is negative. Please top up{" "}
+              {moneyS(Math.abs(wallet.balance))} or more with our staff to cover
+              it before your next payment.
+            </p>
+          )}
           <h2 className="font-bold">Transaction History</h2>
           <Card className="divide-y divide-slate-100">
-            {wallet.tx.map((t) => {
+            {rows.map((t) => {
               const n = Number(t.amount) || 0;
               return (
                 <div key={t.id} className="flex items-center gap-3 px-4 py-3">
@@ -21665,11 +21698,9 @@ const CustomerApp = (() => {
                       {n > 0 ? "+" : n < 0 ? "−" : ""}
                       {money(Math.abs(n))}
                     </p>
-                    {t.balance_after != null && (
-                      <p className="text-[11px] text-slate-400">
-                        Bal {money(t.balance_after)}
-                      </p>
-                    )}
+                    <p className="text-[11px] text-slate-400">
+                      Bal {moneyS(t._after)}
+                    </p>
                   </div>
                 </div>
               );
@@ -28986,7 +29017,13 @@ function TopUpModal({ customer, onClose, onDone }) {
     <WalletModal title={`Top up — ${customer.name}`} onClose={onClose}>
       <div className="mb-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
         Current balance:{" "}
-        <b className="text-slate-900">{money(customer.balance || 0)}</b>
+        <b
+          className={
+            Number(customer.balance) < 0 ? "text-red-600" : "text-slate-900"
+          }
+        >
+          {moneyS(customer.balance || 0)}
+        </b>
       </div>
       <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
         Amount (USD)
@@ -29600,7 +29637,7 @@ function CustomerDetailPage() {
       key: "balance_after",
       label: "Balance",
       search: () => "",
-      render: (r) => (r.balance_after != null ? money(r.balance_after) : "—"),
+      render: (r) => (r.balance_after != null ? moneyS(r.balance_after) : "—"),
     },
     { key: "created_by", label: "By", render: (r) => r.created_by || "—" },
   ];
@@ -29674,8 +29711,8 @@ function CustomerDetailPage() {
           <div className="flex flex-wrap gap-5">
             <CdStat
               label="Wallet"
-              value={money(cust.balance || 0)}
-              tone="text-blue-700"
+              value={moneyS(cust.balance || 0)}
+              tone={Number(cust.balance) < 0 ? "text-red-600" : "text-blue-700"}
             />
             <CdStat label="Total TK" value={packages.length} />
             <CdStat label="In Progress" value={active} tone="text-amber-600" />
@@ -29730,10 +29767,16 @@ function CustomerDetailPage() {
           {/* Side: separate cards */}
           <div className="space-y-4">
             <CdCard title="Wallet" icon="Wallet">
-              <div className="text-2xl font-extrabold text-slate-900">
-                {money(cust.balance || 0)}
+              <div
+                className={`text-2xl font-extrabold ${Number(cust.balance) < 0 ? "text-red-600" : "text-slate-900"}`}
+              >
+                {moneyS(cust.balance || 0)}
               </div>
-              <p className="mt-0.5 text-xs text-slate-400">Available balance</p>
+              <p className="mt-0.5 text-xs text-slate-400">
+                {Number(cust.balance) < 0
+                  ? "Customer owes this amount"
+                  : "Available balance"}
+              </p>
               {canTopUp && (
                 <button
                   type="button"
@@ -29809,11 +29852,11 @@ function wtuStart(range) {
   return 0;
 }
 
-function WalletTopUpCreateModal({ onClose, onDone }) {
+function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
-  const [customer, setCustomer] = useState(null);
+  const [customer, setCustomer] = useState(initialCustomer);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -29881,7 +29924,9 @@ function WalletTopUpCreateModal({ onClose, onDone }) {
               </div>
               <div className="text-xs font-medium normal-case text-slate-500">
                 {customer.phone || "No phone"} · Balance{" "}
-                <b className="text-slate-800">{money(customer.balance || 0)}</b>
+                <b className="text-slate-800">
+                  {moneyS(customer.balance || 0)}
+                </b>
               </div>
             </div>
             <button
@@ -29940,7 +29985,7 @@ function WalletTopUpCreateModal({ onClose, onDone }) {
                       </span>
                     </span>
                     <span className="ml-3 text-xs font-bold normal-case text-slate-600">
-                      {money(c.balance || 0)}
+                      {moneyS(c.balance || 0)}
                     </span>
                   </button>
                 ))}
@@ -29989,7 +30034,7 @@ function WalletTopUpCreateModal({ onClose, onDone }) {
         <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
           New balance:{" "}
           <b className="text-slate-900">
-            {money(Number(customer.balance || 0) + amt)}
+            {moneyS(Number(customer.balance || 0) + amt)}
           </b>
         </div>
       )}
@@ -30027,15 +30072,33 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [bal, setBal] = useState(null); // customer's current balance
+  const [ack, setAck] = useState(false);
   const amt = Math.abs(Number(row.amount) || 0);
+  const debt =
+    bal != null && bal < amt ? Math.round((amt - bal) * 100) / 100 : 0;
+  useEffect(() => {
+    if (!supabase) return;
+    let alive = true;
+    supabase
+      .from("customers")
+      .select("balance")
+      .eq("id", row.customer_id)
+      .maybeSingle()
+      .then(({ data }) => alive && setBal(Number(data?.balance) || 0));
+    return () => {
+      alive = false;
+    };
+  }, [row.customer_id]);
   async function submit() {
-    if (!reason.trim() || busy) return;
+    if (!reason.trim() || busy || (debt > 0 && !ack)) return;
     setBusy(true);
     setErr("");
     const { error } = await supabase.rpc("wallet_reverse_top_up", {
       p_tx_id: String(row.id),
       p_reason: reason.trim(),
       p_by: user?.name || user?.email || "Admin",
+      p_allow_negative: debt > 0 && ack,
     });
     setBusy(false);
     if (error) return setErr(reverseErr(error));
@@ -30055,6 +30118,25 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
         </b>
         . The original record stays in the history marked as reversed.
       </div>
+      {debt > 0 && (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <p>
+            This customer already spent part of this top up (current balance{" "}
+            <b>{moneyS(bal)}</b>). After reversing, their wallet will be{" "}
+            <b className="text-red-600">{moneyS(bal - amt)}</b> — they will owe{" "}
+            <b>{money(debt)}</b>.
+          </p>
+          <label className="mt-2 flex items-start gap-2 text-xs font-semibold">
+            <input
+              type="checkbox"
+              checked={ack}
+              onChange={(e) => setAck(e.target.checked)}
+              className="mt-0.5"
+            />
+            I understand — reverse and let the balance go negative.
+          </label>
+        </div>
+      )}
       <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
         Reason (required)
         <input
@@ -30076,7 +30158,7 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
         </button>
         <button
           type="button"
-          disabled={!reason.trim() || busy}
+          disabled={!reason.trim() || busy || (debt > 0 && !ack)}
           onClick={submit}
           className="h-10 rounded-xl bg-red-600 px-5 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-40"
         >
@@ -30097,6 +30179,7 @@ function WalletTopUpPage() {
   const [range, setRange] = useState("today");
   const [create, setCreate] = useState(false);
   const [reverse, setReverse] = useState(null);
+  const [debtors, setDebtors] = useState([]);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -30120,6 +30203,13 @@ function WalletTopUpPage() {
         setLoading(false);
         return;
       }
+      const { data: owing } = await supabase
+        .from("customers")
+        .select("id, customer_code, name, phone, balance")
+        .lt("balance", 0)
+        .order("balance", { ascending: true })
+        .limit(50);
+      if (alive) setDebtors(owing || []);
       const ids = [...new Set((tx || []).map((r) => r.customer_id))].filter(
         Boolean,
       );
@@ -30181,11 +30271,55 @@ function WalletTopUpPage() {
         Wallet Top Up
       </h1>
 
-      <div className="mb-5 grid gap-4 sm:grid-cols-3">
+      <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stat("ArrowDownToLine", "bg-blue-500", "Net Top Up", money(total))}
         {stat("Receipt", "bg-emerald-500", "Transactions", shown.length)}
         {stat("Users", "bg-violet-500", "Customers", customers)}
+        {stat(
+          "TriangleAlert",
+          debtors.length ? "bg-red-500" : "bg-slate-400",
+          `Customers Owing (${debtors.length})`,
+          money(
+            debtors.reduce((a, c) => a + Math.abs(Number(c.balance) || 0), 0),
+          ),
+        )}
       </div>
+
+      {debtors.length > 0 && (
+        <div className="mb-5 rounded-2xl border border-red-200 bg-red-50/60 p-4">
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-extrabold text-red-700">
+            <Icons.TriangleAlert size={16} /> Customers with a negative wallet
+          </h2>
+          <div className="divide-y divide-red-100">
+            {debtors.map((c) => (
+              <div key={c.id} className="flex items-center gap-3 py-2 text-sm">
+                <Link
+                  to={`/customers/${encodeURIComponent(c.customer_code)}`}
+                  className="font-bold text-blue-700 hover:underline"
+                >
+                  {c.customer_code}
+                </Link>
+                <span className="min-w-0 flex-1 truncate text-slate-700">
+                  {c.name}
+                  {c.phone ? ` · ${c.phone}` : ""}
+                </span>
+                <b className="text-red-600">
+                  Owes {money(Math.abs(c.balance))}
+                </b>
+                {canTopUp && (
+                  <button
+                    type="button"
+                    onClick={() => setCreate(c)}
+                    className="h-8 rounded-lg bg-blue-600 px-3 text-xs font-bold text-white hover:bg-blue-700"
+                  >
+                    Top Up
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -30353,7 +30487,7 @@ function WalletTopUpPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-700">
-                    {r.balance_after != null ? money(r.balance_after) : "—"}
+                    {r.balance_after != null ? moneyS(r.balance_after) : "—"}
                   </td>
                   <td className="px-4 py-3 text-slate-500">{r.note || "—"}</td>
                   <td className="px-4 py-3 text-slate-500">
@@ -30389,6 +30523,7 @@ function WalletTopUpPage() {
       )}
       {create && (
         <WalletTopUpCreateModal
+          initialCustomer={create === true ? null : create}
           onClose={() => setCreate(false)}
           onDone={() => {
             setCreate(false);
