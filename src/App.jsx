@@ -20589,6 +20589,7 @@ const CustomerApp = (() => {
     Ship,
     X,
     ShieldCheck,
+    Wallet,
   } = Icons;
   // =============================================================
   // Customer Portal — SEPARATE from Admin/Staff (Cargo Bridge)
@@ -20677,6 +20678,7 @@ const CustomerApp = (() => {
     const [branches, setBranches] = useState([]); // Active Cambodia receiving branches
     const [branchErr, setBranchErr] = useState("");
     const [loading, setLoading] = useState(true);
+    const [wallet, setWallet] = useState({ balance: 0, tx: [] });
     const [toast, setToast] = useState("");
     const say = (m) => {
       setToast(m);
@@ -20697,13 +20699,24 @@ const CustomerApp = (() => {
       return data;
     };
     const loadShips = async () => {
-      const [{ data: pkgs }, { data: ords }] = await Promise.all([
-        supabase
-          .from("customer_packages")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase.from("customer_orders").select("order_no, platform"),
-      ]);
+      const [{ data: pkgs }, { data: ords }, { data: feeRows }] =
+        await Promise.all([
+          supabase
+            .from("customer_packages")
+            .select("*")
+            .order("created_at", { ascending: false }),
+          supabase.from("customer_orders").select("order_no, platform"),
+          supabase.rpc("customer_shipping_fees"), // needs supabase_customer_wallet.sql
+        ]);
+      const feeOf = Object.fromEntries(
+        (feeRows || []).map((r) => [
+          r.tk,
+          shippingFeeOf({
+            freight_fee: r.freight_fee,
+            paid_amount: r.paid_amount,
+          }),
+        ]),
+      );
       const shopOf = Object.fromEntries(
         (ords || []).map((o) => [o.order_no, o.platform]),
       );
@@ -20714,8 +20727,30 @@ const CustomerApp = (() => {
           desc: p.product_name || "—",
           step: stepOf(p.status),
           createdAt: p.created_at,
+          fee: feeOf[p.tk] || { state: "none", total: null, paid: 0, due: 0 },
         })),
       );
+    };
+    const loadWallet = async () => {
+      const { data, error } = await supabase.rpc("customer_wallet");
+      if (error || !data) return;
+      setWallet({
+        balance: Number(data.balance) || 0,
+        tx: Array.isArray(data.transactions) ? data.transactions : [],
+      });
+    };
+    const refreshMoney = () => Promise.all([loadShips(), loadWallet()]);
+    const payShipping = async (tk) => {
+      const { error } = await supabase.rpc("pay_shipping_fee", {
+        p_tk: tk,
+        p_method: "wallet",
+      });
+      if (error)
+        return /insufficient/i.test(error.message)
+          ? "Your wallet balance is not enough."
+          : error.message || "Payment failed.";
+      await refreshMoney();
+      return null;
     };
     const loadAddrs = async () => {
       const { data } = await supabase
@@ -20779,7 +20814,13 @@ const CustomerApp = (() => {
       (async () => {
         setLoading(true);
         const m = await loadMe(session.user.id);
-        if (m) await Promise.all([loadShips(), loadAddrs(), loadBranches()]);
+        if (m)
+          await Promise.all([
+            loadShips(),
+            loadWallet(),
+            loadAddrs(),
+            loadBranches(),
+          ]);
         setLoading(false);
       })();
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -20878,6 +20919,9 @@ const CustomerApp = (() => {
       signup,
       logout,
       ships,
+      wallet,
+      refreshMoney,
+      payShipping,
       addrs,
       branches,
       branchErr,
@@ -20889,11 +20933,14 @@ const CustomerApp = (() => {
   }
 
   // ---------- UI atoms ----------
-  const Badge = ({ n }) => {
-    const [l, c] = statusOf(n);
+  const Badge = ({ n, fee }) => {
+    const owes = n === 4 && fee?.state === "due" && fee.total > 0;
+    const [l, c] = owes
+      ? ["Pending Shipping Payment", "bg-red-50 text-red-600"]
+      : statusOf(n);
     return (
       <span
-        className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap ${c}`}
+        className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 ${c}`}
       >
         {l}
       </span>
@@ -21120,7 +21167,17 @@ const CustomerApp = (() => {
 
   // ---------- Shell (bottom nav) ----------
   function Shell() {
-    const { me, toast, loading } = useApp();
+    const { me, toast, loading, refreshMoney } = useApp();
+    const { pathname } = useLocation();
+    const first = useRef(true);
+    useEffect(() => {
+      if (first.current) {
+        first.current = false;
+        return;
+      }
+      if (me && supabase) refreshMoney(); // pick up new top-ups / payments
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pathname]);
     if (loading)
       return (
         <div
@@ -21183,7 +21240,7 @@ const CustomerApp = (() => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <b className="text-[15px] truncate">{s.tk}</b>
-            <Badge n={s.step} />
+            <Badge n={s.step} fee={s.fee} />
           </div>
           <p className="text-[13px] text-slate-500 truncate">
             {s.shop} · {s.desc}
@@ -21199,9 +21256,13 @@ const CustomerApp = (() => {
 
   // ---------- Home ----------
   function HomePage() {
-    const { me, ships } = useApp();
+    const { me, ships, wallet } = useApp();
     const nav = useNavigate();
     const [q, setQ] = useState("");
+    const owed = ships.filter(
+      (s) => s.step === 4 && s.fee?.state === "due" && s.fee.total > 0,
+    );
+    const owedTotal = owed.reduce((a, s) => a + s.fee.due, 0);
     const cnt = (f) => ships.filter((s) => f(s.step)).length;
     const stats = [
       ["Total", "សរុប", ships.length, "bg-slate-100 text-slate-700", Package],
@@ -21287,6 +21348,35 @@ const CustomerApp = (() => {
                 ))}
               </div>
               <Card
+                onClick={() => nav(P("/wallet"))}
+                className="p-4 flex items-center gap-3 cursor-pointer"
+              >
+                <Icon i={Wallet} c="bg-emerald-50 text-emerald-600" />
+                <div className="flex-1">
+                  <p className="text-xs text-slate-500">My Wallet</p>
+                  <b className="text-xl">{money(wallet.balance)}</b>
+                </div>
+                <ChevronRight size={18} className="text-slate-300" />
+              </Card>
+              {owed.length > 0 && (
+                <Card
+                  onClick={() => nav(P("/shipments"))}
+                  className="p-4 flex items-center gap-3 cursor-pointer border border-red-100 bg-red-50/60"
+                >
+                  <Icon i={Info} c="bg-red-100 text-red-600" />
+                  <div className="flex-1">
+                    <b className="text-[15px] text-red-700">
+                      {owed.length} shipment{owed.length > 1 ? "s" : ""} waiting
+                      for payment
+                    </b>
+                    <p className="text-xs text-slate-600">
+                      Total due {money(owedTotal)} · tap to pay
+                    </p>
+                  </div>
+                  <ChevronRight size={18} className="text-slate-300" />
+                </Card>
+              )}
+              <Card
                 onClick={() => nav(P("/warehouse"))}
                 className="p-4 flex items-center gap-3 cursor-pointer bg-gradient-to-r from-blue-50 to-white"
               >
@@ -21336,9 +21426,10 @@ const CustomerApp = (() => {
       "In Transit": (n) => n >= 0 && n <= 1,
       Arrived: (n) => n === 2 || n === 3,
       Ready: (n) => n === 4,
+      "To Pay": (n, s) => n === 4 && s.fee?.state === "due" && s.fee.total > 0,
       Completed: (n) => n === 5,
     };
-    const list = ships.filter((s) => tabs[t](s.step));
+    const list = ships.filter((s) => tabs[t](s.step, s));
     return (
       <>
         <Top title="My Shipments" />
@@ -21370,8 +21461,11 @@ const CustomerApp = (() => {
   // ---------- Tracking (customer view: status + dates ONLY) ----------
   function Detail() {
     const { tk } = useParams();
-    const { ships } = useApp();
+    const { ships, wallet, payShipping, say } = useApp();
     const s = ships.find((x) => x.tk === tk);
+    const [confirmPay, setConfirmPay] = useState(false);
+    const [paying, setPaying] = useState(false);
+    const [payErr, setPayErr] = useState("");
     const [reached, setReached] = useState(null); // { "Inbound": iso, "Outbound": iso, ... }
     useEffect(() => {
       if (!supabase || !tk) return;
@@ -21406,7 +21500,7 @@ const CustomerApp = (() => {
                 Shop: {s.shop} · {s.desc}
               </p>
             </div>
-            <Badge n={s.step} />
+            <Badge n={s.step} fee={s.fee} />
           </Card>
           <Card className="p-5">
             <h2 className="font-bold mb-4">Tracking Status</h2>
@@ -21445,10 +21539,147 @@ const CustomerApp = (() => {
               );
             })}
           </Card>
+          {s.step >= 4 && s.fee?.total > 0 && (
+            <Card className="p-5">
+              <h2 className="font-bold mb-3 flex items-center gap-2">
+                <Wallet size={18} className="text-blue-600" /> Shipping Payment
+              </h2>
+              <div className="flex justify-between text-sm py-1">
+                <span className="text-slate-500">Shipping fee</span>
+                <b>{money(s.fee.total)}</b>
+              </div>
+              {s.fee.state === "paid" ? (
+                <p className="mt-2 rounded-xl bg-green-50 text-green-700 text-sm font-semibold px-3 py-2.5 flex items-center gap-2">
+                  <Check size={16} /> Paid — ready for pickup
+                </p>
+              ) : (
+                <>
+                  <div className="flex justify-between text-sm py-1">
+                    <span className="text-slate-500">Amount due</span>
+                    <b className="text-red-600">{money(s.fee.due)}</b>
+                  </div>
+                  <div className="flex justify-between text-sm py-1">
+                    <span className="text-slate-500">My wallet</span>
+                    <b>{money(wallet.balance)}</b>
+                  </div>
+                  {wallet.balance < s.fee.due ? (
+                    <p className="mt-3 rounded-xl bg-amber-50 text-amber-700 text-xs px-3 py-2.5">
+                      Your wallet balance is not enough. You need{" "}
+                      {money(s.fee.due - wallet.balance)} more — please top up
+                      your wallet with our staff, then come back to pay.
+                    </p>
+                  ) : confirmPay ? (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-sm text-slate-600">
+                        {money(s.fee.due)} will be deducted from your wallet.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Btn
+                          ghost
+                          disabled={paying}
+                          onClick={() => setConfirmPay(false)}
+                        >
+                          Cancel
+                        </Btn>
+                        <Btn
+                          disabled={paying}
+                          onClick={async () => {
+                            setPaying(true);
+                            setPayErr("");
+                            const err = await payShipping(s.tk);
+                            setPaying(false);
+                            if (err) return setPayErr(err);
+                            setConfirmPay(false);
+                            say("Payment successful");
+                          }}
+                        >
+                          {paying ? "Paying…" : "Confirm"}
+                        </Btn>
+                      </div>
+                    </div>
+                  ) : (
+                    <Btn className="mt-3" onClick={() => setConfirmPay(true)}>
+                      Pay {money(s.fee.due)} from Wallet
+                    </Btn>
+                  )}
+                  {payErr && (
+                    <p className="mt-2 text-xs font-semibold text-red-600">
+                      {payErr}
+                    </p>
+                  )}
+                </>
+              )}
+            </Card>
+          )}
           <p className="flex gap-2 text-xs text-slate-500 bg-blue-50 rounded-xl p-3">
             <Info size={16} className="shrink-0 text-blue-500" />
             Detailed staff and internal information is not visible to customers.
           </p>
+        </div>
+      </>
+    );
+  }
+
+  // ---------- Wallet ----------
+  function WalletPage() {
+    const { wallet, refreshMoney } = useApp();
+    useEffect(() => {
+      refreshMoney();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const label = {
+      top_up: "Top up",
+      top_up_reversal: "Top up reversed",
+      shipping_payment: "Shipping payment",
+      shipping_payment_cash: "Shipping paid (cash)",
+    };
+    return (
+      <>
+        <Top title="My Wallet" back />
+        <div className="px-4 pt-4 space-y-4">
+          <Card className="p-5 bg-gradient-to-br from-blue-600 to-blue-700 text-white">
+            <p className="text-sm text-blue-100">Available balance</p>
+            <p className="text-3xl font-extrabold mt-1">
+              {money(wallet.balance)}
+            </p>
+          </Card>
+          <h2 className="font-bold">Transaction History</h2>
+          <Card className="divide-y divide-slate-100">
+            {wallet.tx.map((t) => {
+              const n = Number(t.amount) || 0;
+              return (
+                <div key={t.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold">
+                      {label[t.type] || t.type}
+                    </p>
+                    <p className="text-xs text-slate-400 truncate">
+                      {fmtDate(t.created_at)}
+                      {t.tk ? ` · ${t.tk}` : ""}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p
+                      className={`text-sm font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
+                    >
+                      {n > 0 ? "+" : n < 0 ? "−" : ""}
+                      {money(Math.abs(n))}
+                    </p>
+                    {t.balance_after != null && (
+                      <p className="text-[11px] text-slate-400">
+                        Bal {money(t.balance_after)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {!wallet.tx.length && (
+              <p className="text-center text-sm text-slate-400 py-8">
+                No transactions yet
+              </p>
+            )}
+          </Card>
         </div>
       </>
     );
@@ -21979,6 +22210,7 @@ const CustomerApp = (() => {
       ],
     ];
     const links = [
+      [Wallet, "My Wallet", () => nav(P("/wallet"))],
       [Warehouse, "My China Warehouse", () => nav(P("/warehouse"))],
       [Lock, "Change Password"],
       [Bell, "Notification Settings"],
@@ -22043,6 +22275,7 @@ const CustomerApp = (() => {
             <Route path="shipments" element={<Shipments />} />
             <Route path="shipments/:tk" element={<Detail />} />
             <Route path="warehouse" element={<ChinaWH />} />
+            <Route path="wallet" element={<WalletPage />} />
             <Route path="addresses" element={<Addresses />} />
             <Route path="profile" element={<Profile />} />
           </Route>
