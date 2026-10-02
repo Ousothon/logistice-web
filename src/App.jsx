@@ -20745,7 +20745,9 @@ const CustomerApp = (() => {
         balance: Number(data.balance) || 0,
         // reversals are admin-only: never show them (or the top-ups they cancel)
         tx: (Array.isArray(data.transactions) ? data.transactions : []).filter(
-          (t) => t.type !== "top_up_reversal" && !t.reversed_at,
+          (t) =>
+            t.type !== "top_up_reversal" &&
+            (Number(t.amount) !== 0 || t.type === "shipping_payment_cash"),
         ),
       });
     };
@@ -30074,9 +30076,15 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
   const [err, setErr] = useState("");
   const [bal, setBal] = useState(null); // customer's current balance
   const [ack, setAck] = useState(false);
-  const amt = Math.abs(Number(row.amount) || 0);
+  // A top up can be reversed in parts: `remaining` = what is still reversible.
+  const total = Math.abs(Number(row.amount) || 0);
+  const already = Number(row.reversed_amount) || 0;
+  const remaining = Math.round((total - already) * 100) / 100;
+  const [amountStr, setAmountStr] = useState(String(remaining));
+  const amt = Math.round((Number(amountStr) || 0) * 100) / 100;
+  const amtOk = amt > 0 && amt <= remaining;
   const debt =
-    bal != null && bal < amt ? Math.round((amt - bal) * 100) / 100 : 0;
+    bal != null && amtOk && bal < amt ? Math.round((amt - bal) * 100) / 100 : 0;
   useEffect(() => {
     if (!supabase) return;
     let alive = true;
@@ -30091,13 +30099,14 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
     };
   }, [row.customer_id]);
   async function submit() {
-    if (!reason.trim() || busy || (debt > 0 && !ack)) return;
+    if (!reason.trim() || !amtOk || busy || (debt > 0 && !ack)) return;
     setBusy(true);
     setErr("");
     const { error } = await supabase.rpc("wallet_reverse_top_up", {
       p_tx_id: String(row.id),
       p_reason: reason.trim(),
       p_by: user?.name || user?.email || "Admin",
+      p_amount: amt,
       p_allow_negative: debt > 0 && ack,
     });
     setBusy(false);
@@ -30105,19 +30114,47 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
     emitCBToast(
       "ok",
       "Top up reversed",
-      `${money(amt)} deducted from ${row._c?.name || "customer"}.`,
+      `${money(amt)} deducted from ${row._c?.name || "customer"}${amt < remaining ? ` (${money(remaining - amt)} still reversible)` : ""}.`,
     );
     onDone();
   }
   return (
     <WalletModal title="Reverse Top Up" onClose={onClose}>
       <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-slate-700">
-        <b>{money(amt)}</b> will be deducted from{" "}
+        <b>{amtOk ? money(amt) : "—"}</b> will be deducted from{" "}
         <b>
           {row._c?.customer_code} · {row._c?.name}
         </b>
-        . The original record stays in the history marked as reversed.
+        . The original top up of <b>{money(total)}</b>
+        {already > 0 && <> (already reversed {money(already)})</>} stays in the
+        history.
       </div>
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Amount to reverse (max {money(remaining)})
+        <div className="mt-1 flex gap-2">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            max={remaining}
+            className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm font-normal normal-case outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            value={amountStr}
+            onChange={(e) => setAmountStr(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => setAmountStr(String(remaining))}
+            className="h-11 shrink-0 rounded-xl border border-slate-200 px-3 text-xs font-bold normal-case text-slate-600 hover:bg-slate-50"
+          >
+            Full
+          </button>
+        </div>
+      </label>
+      {amountStr !== "" && !amtOk && (
+        <p className="mt-1 text-xs font-semibold text-red-600">
+          Enter an amount between $0.01 and {money(remaining)}.
+        </p>
+      )}
       {debt > 0 && (
         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <p>
@@ -30158,7 +30195,7 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
         </button>
         <button
           type="button"
-          disabled={!reason.trim() || busy || (debt > 0 && !ack)}
+          disabled={!reason.trim() || !amtOk || busy || (debt > 0 && !ack)}
           onClick={submit}
           className="h-10 rounded-xl bg-red-600 px-5 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-40"
         >
@@ -30483,6 +30520,11 @@ function WalletTopUpPage() {
                     {r.reversed_at && (
                       <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
                         Reversed
+                      </span>
+                    )}
+                    {!r.reversed_at && Number(r.reversed_amount) > 0 && (
+                      <span className="ml-2 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                        −{money(r.reversed_amount)} reversed
                       </span>
                     )}
                   </td>
