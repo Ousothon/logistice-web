@@ -3098,7 +3098,6 @@ function OrderRouteCard({ order, onUpdated }) {
               <input
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="ឧ. Customer requested different receiving location"
                 className={INPUT_CLS}
               />
             </div>
@@ -4262,7 +4261,6 @@ function CustomerPicker({
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="Searchតាម ID, ឈ្មោះ ឬPhone number..."
             className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
           />
           {open && query && (loading || results.length > 0 || !strict) && (
@@ -4459,7 +4457,6 @@ function OrderPicker({ customer, value, onChange }) {
           <input
             value={platform}
             onChange={(e) => setPlatform(e.target.value)}
-            placeholder="Platform (Taobao, 1688, ...) — ស្រេចចិត្ត"
             className={INPUT_CLS}
           />
           <WarehouseSelect
@@ -4920,7 +4917,6 @@ function CargoCalculator({
                   value={form[key]}
                   onChange={set(key)}
                   className={INPUT_CLS}
-                  placeholder="0"
                 />
               </div>
             ))}
@@ -4938,7 +4934,6 @@ function CargoCalculator({
           value={form.weight}
           onChange={set("weight")}
           className={INPUT_CLS}
-          placeholder="12.5"
         />
       </div>
 
@@ -5016,7 +5011,6 @@ function CargoCalculator({
                 setOverride((o) => ({ ...o, value: e.target.value }))
               }
               className={`${INPUT_CLS} mt-3`}
-              placeholder="Override freight"
             />
           )}
         </div>
@@ -5378,7 +5372,6 @@ function CreatePackageModal({ open, onClose, onCreated }) {
                 // A barcode scanner ends with Enter — don't submit the form.
                 onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
                 className="flex-1 outline-none text-sm bg-transparent"
-                placeholder="Scan ឬវាយ TK — 786123456789"
               />
             </div>
             {duplicateTk && (
@@ -5437,7 +5430,6 @@ function CreatePackageModal({ open, onClose, onCreated }) {
               value={f.product}
               onChange={(e) => setF((x) => ({ ...x, product: e.target.value }))}
               className={INPUT_CLS}
-              placeholder="Bluetooth Earbuds Pro"
             />
           </div>
           <div>
@@ -5453,7 +5445,6 @@ function CreatePackageModal({ open, onClose, onCreated }) {
                 setF((x) => ({ ...x, packageCount: e.target.value }))
               }
               className={INPUT_CLS}
-              placeholder="1"
             />
             <p className="text-[11px] text-ink-600/50 mt-1">
               ទំនិញជាឈុត មាន 2 Packageឡើងទៅ → ស្លាក Print បាន 1/2, 2/2 …
@@ -5671,13 +5662,11 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
           <input
             value={route}
             onChange={(e) => setRoute(e.target.value)}
-            placeholder="Route"
             className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
           />
           <input
             value={transport}
             onChange={(e) => setTransport(e.target.value)}
-            placeholder="Transport (Sea / Land / Air)"
             className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
           />
           <div className="flex gap-2">
@@ -5707,7 +5696,6 @@ function ShipmentPicker({ value, onChange, allowCreate = true }) {
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="Search Shipment No / Route..."
             className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
           />
           {open && (
@@ -5868,7 +5856,6 @@ function CreateArrivalModal({ open, onClose, onCreated }) {
               value={port}
               onChange={(e) => setPort(e.target.value)}
               className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-              placeholder="Sihanoukville Port"
             />
           </div>
           <div>
@@ -5879,7 +5866,6 @@ function CreateArrivalModal({ open, onClose, onCreated }) {
               value={arrivalDate}
               onChange={(e) => setArrivalDate(e.target.value)}
               className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-              placeholder="05 Oct 2026"
             />
           </div>
         </div>
@@ -5957,13 +5943,6 @@ function TransferAccountLookup({
               autoFocus
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
-              placeholder={
-                transferType === "uid"
-                  ? "887"
-                  : transferType === "phone"
-                    ? "+855..."
-                    : "ឈ្មោះ Customer..."
-              }
               className="w-full pl-8 pr-3 py-2 text-sm outline-none"
             />
           </div>
@@ -6515,7 +6494,6 @@ function VerifyScanModal({
                       onChange={(e) =>
                         setDims((d) => ({ ...d, reason: e.target.value }))
                       }
-                      placeholder="ឧ. ចិនវាស់ខុស / ថ្លឹងលើកទីពីរ"
                       className={INPUT_CLS}
                     />
                   </div>
@@ -6657,6 +6635,14 @@ const SCAN_CSS = `
 .cb-scan--error.cb-scan-shake-b { animation: cb-scan-shake-b .3s ease-in-out both; }
 
 /* sweeping scan line (only visible while scanning) */
+.cb-scan input,
+.cb-scan input:focus,
+.cb-scan input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  background: transparent !important;
+}
 .cb-scan__line {
   position: absolute;
   inset: 0;
@@ -6876,7 +6862,6 @@ function TkScanField({
           spellCheck={false}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
           className="flex-1 min-w-0 outline-none text-[15px] font-medium tracking-wide text-ink-900 bg-transparent placeholder:font-normal placeholder:tracking-normal"
         />
         {actionLabel && (
@@ -7161,7 +7146,6 @@ function ScanConfirmPage({
                   setTkInput(v);
                   scan.onInput(v);
                 }}
-                placeholder={scanPlaceholder}
                 scan={scan}
               />
             </form>
@@ -7832,7 +7816,6 @@ function WarehouseManagementPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search Code, Name, Province..."
               className="outline-none text-sm bg-transparent w-56"
             />
           </div>
@@ -8007,7 +7990,6 @@ function KhWarehousePage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search Name, Code, Province..."
               className="outline-none text-sm bg-transparent w-64"
             />
           </div>
@@ -8483,9 +8465,6 @@ function SortingPage() {
                   setTkInput(value);
                   scan.onInput(value);
                 }}
-                placeholder={
-                  canScan ? "Scan TK barcode..." : "No permission to scan TKs"
-                }
                 scan={scan}
                 actionLabel="Verify"
                 onAction={() => {
@@ -8585,7 +8564,6 @@ function SortingPage() {
                   <input
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
-                    placeholder="e.g. Shelf A-03 / customer requested Phnom Penh branch"
                     className="w-full bg-white border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue"
                   />
                 </div>
@@ -8656,7 +8634,6 @@ function SortingPage() {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search TK, customer, order, container..."
                 className="flex-1 bg-transparent outline-none text-sm"
               />
             </div>
@@ -9536,7 +9513,6 @@ function Topbar({ title, onMenuClick }) {
           value={globalSearch}
           onChange={(e) => setGlobalSearch(e.target.value)}
           className="bg-transparent outline-none text-sm text-ink-900 placeholder:text-ink-600/40 w-full"
-          placeholder="Search TK, Order, Container..."
         />
       </form>
 
@@ -10242,7 +10218,6 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
                 type={showPassword ? "text" : "password"}
                 value={values.password ?? ""}
                 onChange={(e) => set("password", e.target.value)}
-                placeholder="យ៉ាងតិច 8 តួអក្សរ"
                 className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 pr-9 text-sm outline-none focus:border-signal-blue"
               />
               <button
@@ -10535,7 +10510,6 @@ function CreateTransferModal({ open, onClose, onCreated }) {
                 setFromLabel(null);
               }}
               onBlur={checkTk}
-              placeholder="TK202609250041"
               className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
             />
             {tkChecked && (
@@ -10575,7 +10549,6 @@ function CreateTransferModal({ open, onClose, onCreated }) {
             <input
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="Wrong Customer ID..."
               className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
             />
           </div>
@@ -11010,7 +10983,6 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
               setValue(v);
               scan.onInput(v);
             }}
-            placeholder="e.g. TK202609250041"
             scan={scan}
           />
           {pkg && (
@@ -11092,7 +11064,6 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
                     <input
                       value={q}
                       onChange={(e) => setQ(e.target.value)}
-                      placeholder="Search Container..."
                       className="w-full bg-white border border-mist-200 rounded-md px-3 py-1.5 text-sm outline-none focus:border-signal-blue"
                     />
                   )}
@@ -11673,7 +11644,6 @@ function StatusHistoryCard({ pkg, timeline }) {
             <input
               value={remark}
               onChange={(e) => setRemark(e.target.value)}
-              placeholder="Remark (ចាំបាច់សម្រាប់ Exception)"
               className={`${INPUT_CLS} flex-1 min-w-[160px]`}
             />
             <button
@@ -12156,7 +12126,6 @@ function ListPage({
               value={search}
               onChange={resetToFirstPage((e) => setSearch(e.target.value))}
               className="bg-transparent outline-none text-sm w-full placeholder:text-ink-600/40"
-              placeholder="Search..."
             />
           </div>
 
@@ -12735,7 +12704,6 @@ function Login() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@cargobridge.com"
                 className="w-full rounded-xl border border-mist-200 bg-[#fbfcfe] px-4 py-3 text-sm text-ink-900 outline-none transition-all placeholder:text-ink-600/35 focus:border-signal-blue focus:bg-white focus:ring-4 focus:ring-signal-blue/10"
                 autoComplete="email"
               />
@@ -12761,7 +12729,6 @@ function Login() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
                   className="w-full rounded-xl border border-mist-200 bg-[#fbfcfe] px-4 py-3 pr-11 text-sm text-ink-900 outline-none transition-all placeholder:text-ink-600/35 focus:border-signal-blue focus:bg-white focus:ring-4 focus:ring-signal-blue/10"
                   autoComplete="current-password"
                 />
@@ -13048,7 +13015,6 @@ function Register() {
             <input
               value={form.name}
               onChange={update("name")}
-              placeholder="Sothon Shop"
               className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 text-sm outline-none focus:border-signal-blue transition-colors"
             />
           </div>
@@ -13060,7 +13026,6 @@ function Register() {
             <input
               value={form.phone}
               onChange={update("phone")}
-              placeholder="012 345 678"
               className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 text-sm outline-none focus:border-signal-blue transition-colors"
             />
           </div>
@@ -13073,7 +13038,6 @@ function Register() {
               type="email"
               value={form.email}
               onChange={update("email")}
-              placeholder="you@email.com"
               className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 text-sm outline-none focus:border-signal-blue transition-colors"
               autoComplete="email"
             />
@@ -13088,7 +13052,6 @@ function Register() {
                 type={showPassword ? "text" : "password"}
                 value={form.password}
                 onChange={update("password")}
-                placeholder="••••••••"
                 className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 pr-10 text-sm outline-none focus:border-signal-blue transition-colors"
                 autoComplete="new-password"
               />
@@ -13111,7 +13074,6 @@ function Register() {
               type={showPassword ? "text" : "password"}
               value={form.confirm}
               onChange={update("confirm")}
-              placeholder="••••••••"
               className="w-full bg-white border border-mist-200 rounded-md px-3.5 py-2.5 text-sm outline-none focus:border-signal-blue transition-colors"
               autoComplete="new-password"
             />
@@ -13532,7 +13494,6 @@ function ShipmentLookup() {
           <div className="flex gap-3 flex-wrap">
             <input
               type="text"
-              placeholder="ឧ. KH-000582 ឬ TK202609250041 ឬ Sothon Shop"
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
               onKeyPress={(e) => e.key === "Enter" && handleSearch()}
@@ -13812,7 +13773,6 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
             <input
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="Wrong Customer ID..."
               className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
             />
           </div>
@@ -14110,7 +14070,6 @@ function EditPackageModal({ open, pkg, onClose }) {
               className={INPUT_CLS}
               value={f.reason ?? ""}
               onChange={set("reason")}
-              placeholder="Reason for adjustment"
             />
           </div>
           <p className="text-[11px] text-ink-600/45">
@@ -14201,7 +14160,6 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
               className={INPUT_CLS}
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              placeholder={tk}
             />
           </div>
           {error && <p className="text-xs text-signal-red">{error}</p>}
@@ -17807,7 +17765,6 @@ function ContainerFormModal({ open, existing, whRows, onClose, onSave }) {
             <input
               value={v.container_number}
               disabled={!!existing}
-              placeholder="MSCU1234567"
               onChange={set("container_number")}
               className={`${INPUT_CLS} uppercase disabled:bg-mist-50 disabled:text-ink-600/60`}
             />
@@ -18077,7 +18034,6 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
                     addTokens(t);
                   }
                 }}
-                placeholder="Scan ឬវាយ TK រួចចុច Enter"
                 className={INPUT_CLS}
               />
               <button
@@ -18102,7 +18058,6 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search TK ដែលអាចដាក់បាន..."
               className={INPUT_CLS}
             />
             {results.length > 0 && (
@@ -18304,7 +18259,6 @@ function SealModal({ open, container, tkCount, by, onSeal, onClose }) {
               autoFocus
               value={seal}
               onChange={(e) => setSeal(e.target.value)}
-              placeholder="SL998812"
               className={`${INPUT_CLS} uppercase`}
             />
           </div>
@@ -18500,7 +18454,6 @@ function ContainerExceptionModal({
           list="ct-ex-tks"
           value={tk}
           onChange={(e) => setTk(e.target.value)}
-          placeholder="TK Number"
           className={INPUT_CLS}
         />
         <datalist id="ct-ex-tks">
@@ -18912,7 +18865,6 @@ function TransferTkModal({
               autoFocus
               value={tkInput}
               onChange={(e) => setTkInput(e.target.value)}
-              placeholder="Scan ឬវាយ TK"
               className={INPUT_CLS}
             />
             {hint && (
@@ -19604,7 +19556,6 @@ function ContainersPageInner() {
           <input
             value={f.q}
             onChange={setFilter("q")}
-            placeholder="Search Container No, Seal, Shipment ID, TK, Order ID, Customer ID..."
             className={`${INPUT_CLS} pl-9`}
           />
         </div>
@@ -20919,7 +20870,6 @@ const CustomerApp = (() => {
           <input
             value={v}
             onChange={(e) => set(e.target.value)}
-            placeholder={ph}
             type={pw && !show ? "password" : type}
             className="flex-1 bg-transparent outline-none text-[15px] text-slate-900 min-w-0"
           />
@@ -21252,7 +21202,6 @@ const CustomerApp = (() => {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search tracking number"
               className="flex-1 outline-none text-[15px]"
             />
           </div>
@@ -21581,7 +21530,6 @@ const CustomerApp = (() => {
             <input
               value={value}
               onChange={(e) => onPick(e.target.value)}
-              placeholder={ph}
               className={box}
             />
             {options.length > 0 && (
@@ -21895,7 +21843,6 @@ const CustomerApp = (() => {
               <input
                 value={bq}
                 onChange={(e) => setBq(e.target.value)}
-                placeholder="Searchសាខា ឬ ខេត្ត..."
                 className="h-11 px-3 rounded-xl border border-slate-200 bg-white text-sm outline-none"
               />
               <div className="flex-1 overflow-y-auto space-y-2">
@@ -22157,7 +22104,6 @@ function CreateRoleModal({ open, roles, onClose, onCreate }) {
                 min={1}
                 className={INPUT_CLS}
                 value={f.level ?? ""}
-                placeholder="e.g. 5"
                 onChange={(e) => setF((v) => ({ ...v, level: e.target.value }))}
               />
             </div>
@@ -22614,7 +22560,6 @@ function RoleManagementPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search role"
             className={`${INPUT_CLS} pl-8`}
           />
         </div>
@@ -22838,7 +22783,6 @@ function RoleManagementPage() {
               <input
                 value={permQ}
                 onChange={(e) => setPermQ(e.target.value)}
-                placeholder="Search permission"
                 className={`${INPUT_CLS} !w-48 pl-7`}
               />
             </div>
@@ -23252,7 +23196,6 @@ function ProcessTrackingPage() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search TK, order, customer, container..."
                 className="flex-1 min-w-0 outline-none bg-transparent text-sm"
               />
             </div>
@@ -23497,8 +23440,10 @@ function ScanCenterPage() {
   const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState(null);
   const [phase, setPhase] = useState("idle");
+  const [shakeKey, setShakeKey] = useState(0);
   const inputRef = useRef(null);
   const timerRef = useRef(null);
+  const holdRef = useRef(null);
 
   const canScan = hasPermission(user, "tk.scan");
   const canProcess =
@@ -23506,7 +23451,10 @@ function ScanCenterPage() {
 
   useEffect(() => {
     inputRef.current?.focus();
-    return () => clearTimeout(timerRef.current);
+    return () => {
+      clearTimeout(timerRef.current);
+      clearTimeout(holdRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -23553,12 +23501,14 @@ function ScanCenterPage() {
     const tk = String(raw || "").trim();
     if (!tk) return;
     clearTimeout(timerRef.current);
+    clearTimeout(holdRef.current);
     setPhase("scanning");
     const pkg = findPackage(tk);
     if (!pkg) {
       setSelected(null);
       setNotice({ type: "error", text: `TK "${tk}" was not found.` });
       setPhase("error");
+      setShakeKey((k) => k + 1);
       setValue("");
       inputRef.current?.focus();
       return;
@@ -23567,16 +23517,19 @@ function ScanCenterPage() {
     setValue("");
     setNotice(null);
     setPhase("success");
+    holdRef.current = setTimeout(() => setPhase("idle"), SCAN_SUCCESS_HOLD_MS);
     inputRef.current?.focus();
   }
 
   function onInput(e) {
     const v = e.target.value;
     setValue(v);
+    clearTimeout(holdRef.current);
     if (!v.trim()) {
       setPhase("idle");
       return;
     }
+    setPhase("scanning");
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => lookup(v), 300);
   }
@@ -23684,26 +23637,59 @@ function ScanCenterPage() {
                 </p>
               </div>
               <span
-                className={`text-[11px] font-semibold px-2 py-1 rounded-full ${phase === "success" ? "bg-signal-teal/10 text-signal-teal" : phase === "error" ? "bg-signal-red/10 text-signal-red" : "bg-mist-100 text-ink-600/55"}`}
+                className={`text-[11px] font-semibold px-2 py-1 rounded-full transition-colors duration-200 ${phase === "success" ? "bg-signal-teal/10 text-signal-teal" : phase === "error" ? "bg-signal-red/10 text-signal-red" : phase === "scanning" ? "bg-signal-blue/10 text-signal-blue" : "bg-mist-100 text-ink-600/55"}`}
               >
                 {phase === "success"
                   ? "Verified"
                   : phase === "error"
                     ? "Not Found"
-                    : "Ready to scan"}
+                    : phase === "scanning"
+                      ? "Scanning…"
+                      : "Ready to scan"}
               </span>
             </div>
+            <style>{SCAN_CSS}</style>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 lookup(value);
               }}
             >
-              <div className="flex items-center gap-3 border-2 border-mist-200 rounded-lg px-4 py-3.5 focus-within:border-signal-blue focus-within:ring-4 focus-within:ring-signal-blue/5">
-                <Icons.ScanLine
-                  size={20}
-                  className="text-signal-blue shrink-0"
-                />
+              <div
+                className={`cb-scan cb-scan--${phase} ${
+                  phase === "error"
+                    ? shakeKey % 2
+                      ? "cb-scan-shake-a"
+                      : "cb-scan-shake-b"
+                    : ""
+                } ${
+                  phase === "scanning"
+                    ? "text-signal-blue"
+                    : phase === "success"
+                      ? "text-signal-teal"
+                      : phase === "error"
+                        ? "text-signal-red"
+                        : "text-ink-600"
+                } flex items-center gap-3 bg-white border-2 border-mist-200 rounded-lg px-4 py-3.5 focus-within:border-signal-blue`}
+              >
+                <span className="cb-scan__icon" aria-hidden="true">
+                  <Icons.ScanLine className="cb-ico-scan" size={18} />
+                  <svg
+                    className="cb-ico-check"
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="9.5" strokeOpacity=".35" />
+                    <path d="M7.5 12.5l3 3 6-6.5" pathLength="1" />
+                  </svg>
+                  <Icons.TriangleAlert className="cb-ico-err" size={18} />
+                </span>
                 <input
                   ref={inputRef}
                   autoFocus
@@ -23712,7 +23698,6 @@ function ScanCenterPage() {
                   value={value}
                   onChange={onInput}
                   disabled={!canScan || !ready}
-                  placeholder="Scan or enter TK number…"
                   className="flex-1 min-w-0 outline-none text-base font-medium bg-transparent placeholder:font-normal placeholder:text-ink-600/35"
                 />
                 <button
@@ -23722,6 +23707,7 @@ function ScanCenterPage() {
                 >
                   <Search size={15} /> Verify
                 </button>
+                <span className="cb-scan__line" aria-hidden="true" />
               </div>
             </form>
             {!canScan && (
@@ -24149,7 +24135,6 @@ function ExceptionCenterPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search Exception ID, TK, type..."
               className="flex-1 outline-none bg-transparent text-sm"
             />
           </div>
@@ -24427,7 +24412,6 @@ function ExceptionCenterPage() {
                   onChange={(e) =>
                     setForm((f) => ({ ...f, tk: e.target.value }))
                   }
-                  placeholder="e.g. TK202609250041"
                   className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue"
                 />
               </div>
@@ -24475,7 +24459,6 @@ function ExceptionCenterPage() {
                     setForm((f) => ({ ...f, description: e.target.value }))
                   }
                   rows="4"
-                  placeholder="Describe what happened..."
                   className="w-full mt-1 border border-mist-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-signal-blue resize-none"
                 />
               </div>
@@ -24975,7 +24958,6 @@ function SettingsPage() {
                         {l}
                         <input
                           className={input}
-                          placeholder={p}
                           value={settings.company[k] || ""}
                           onChange={(e) => update("company", k, e.target.value)}
                         />
