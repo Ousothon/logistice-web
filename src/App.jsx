@@ -859,6 +859,10 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    label: "Finance",
+    items: [{ label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" }],
+  },
+  {
     label: "Exceptions & Reports",
     items: [
       { label: "Exceptions", icon: "TriangleAlert", path: "/exceptions" },
@@ -1048,6 +1052,7 @@ const PERMISSION_GROUPS = [
       ["exception.view", "View Exceptions"],
       ["audit.view", "View Audit Logs"],
       ["report.view", "View Reports"],
+      ["payment.manage", "Top Up Wallet & Record Shipping Payments"],
     ],
   },
   {
@@ -1097,6 +1102,7 @@ const PATH_VIEW = {
   "/locations": "location.view",
   "/warehouse-operations": "warehouse_ops.view",
   "/exceptions": "exception.view",
+  "/wallet-top-up": "payment.manage",
   "/users": "user.view",
   "/roles": "role.view",
   "/permissions": "role.view",
@@ -1564,7 +1570,9 @@ const MODULES = {
       col("warehouse", "China WH"),
       col("dest_branch", "Receiving Branch"),
       col("inbound_status", "Inbound", { status: true }),
-      col("status", "Status", { status: true }),
+      col("status", "Status", {
+        render: (row) => <StatusBadge label={pkgDisplayStatus(row) || "—"} />,
+      }),
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
@@ -8920,6 +8928,7 @@ const RULES = [
       "cleared",
       "ready",
       "checked",
+      "paid",
     ],
   },
   {
@@ -15297,7 +15306,12 @@ function PackageDetail() {
                     </button>
                   </div>
                   <div className="mt-1.5">
-                    <StatusBadge label={currentStage} />
+                    <StatusBadge
+                      label={pkgDisplayStatus({
+                        ...data,
+                        status: currentStage,
+                      })}
+                    />
                   </div>
                   <div className="text-[11px] text-ink-600/45 mt-1.5">
                     Last Updated: {lastUpdated}
@@ -15585,7 +15599,14 @@ function PackageDetail() {
                   <KV k="Created At" v={createdAt} />
                   <KV
                     k="Current Status"
-                    v={<StatusBadge label={currentStage} />}
+                    v={
+                      <StatusBadge
+                        label={pkgDisplayStatus({
+                          ...data,
+                          status: currentStage,
+                        })}
+                      />
+                    }
                   />
                 </div>
                 <div>
@@ -15712,6 +15733,7 @@ function PackageDetail() {
         {/* ============ RIGHT / SIDEBAR ============ */}
         <div className="space-y-5">
           <CustomerDetailsCard customerId={data.customer_id} />
+          <PayShippingCard pkg={data} stage={currentStage} />
 
           <div className={`${CARD} p-5`}>
             <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
@@ -22771,7 +22793,7 @@ function RoleManagementPage() {
             {listRoles.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-4 py-6 text-center text-ink-600/50"
                 >
                   រកមិនឃើញ Role ទេ
@@ -28657,6 +28679,260 @@ function ReportsPage() {
 }
 
 // ============================================================
+// SHIPPING PAYMENT + WALLET (see supabase_wallet_payment.sql)
+// Tracking stage stays "Inbound Warehouse"; the DISPLAYED status is
+// "Pending Shipping Payment" until the fee is paid, then "Shipping Paid".
+// ============================================================
+const PAY_STATUS = {
+  PENDING: "Pending Shipping Payment",
+  PAID: "Shipping Paid",
+};
+function pkgDisplayStatus(p) {
+  const s = p?.status;
+  if (s !== "Inbound Warehouse") return s;
+  const f = shippingFeeOf(p);
+  if (f.state === "due") return PAY_STATUS.PENDING;
+  if (f.state === "paid" && f.total > 0) return PAY_STATUS.PAID;
+  return s;
+}
+const walletErr = (e) =>
+  /function .* does not exist|wallet_transactions|balance|paid_at|schema cache/i.test(
+    e?.message || "",
+  )
+    ? "Run supabase_wallet_payment.sql in Supabase first."
+    : e?.message || "Request failed.";
+
+function WalletModal({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-extrabold text-slate-900">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-700"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function TopUpModal({ customer, onClose, onDone }) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const amt = Number(amount);
+  const valid = Number.isFinite(amt) && amt > 0;
+  const field =
+    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+  async function submit() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase.rpc("wallet_top_up", {
+      p_customer_id: String(customer.id),
+      p_amount: Math.round(amt * 100) / 100,
+      p_note: note.trim() || null,
+    });
+    setBusy(false);
+    if (error) return setErr(walletErr(error));
+    emitCBToast(
+      "ok",
+      "Top up successful",
+      `${money(amt)} added to ${customer.name}.`,
+    );
+    onDone();
+  }
+  return (
+    <WalletModal title={`Top up — ${customer.name}`} onClose={onClose}>
+      <div className="mb-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+        Current balance:{" "}
+        <b className="text-slate-900">{money(customer.balance || 0)}</b>
+      </div>
+      <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        Amount (USD)
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          autoFocus
+          className={field}
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+        />
+      </label>
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Note (optional)
+        <input
+          className={field}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. ABA transfer, cash"
+        />
+      </label>
+      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!valid || busy}
+          onClick={submit}
+          className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+        >
+          {busy ? "Saving…" : "Top up"}
+        </button>
+      </div>
+    </WalletModal>
+  );
+}
+
+// Sidebar card on the TK detail page.
+function PayShippingCard({ pkg, stage }) {
+  const { user } = useAuth();
+  const canPay = hasPermission(user, "payment.manage");
+  const fee = shippingFeeOf(pkg);
+  const [bal, setBal] = useState(null);
+  const [confirm, setConfirm] = useState(null); // "wallet" | "cash"
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!supabase || !pkg?.customer_id) return;
+    let alive = true;
+    supabase
+      .from("customers")
+      .select("balance")
+      .eq("id", pkg.customer_id)
+      .maybeSingle()
+      .then(({ data }) => alive && setBal(Number(data?.balance) || 0));
+    return () => {
+      alive = false;
+    };
+  }, [pkg?.customer_id, tick, pkg?.paid_amount]);
+
+  const reached =
+    PACKAGE_STAGES.indexOf(stage) >=
+    PACKAGE_STAGES.indexOf("Inbound Warehouse");
+  if (!reached || fee.state === "none" || !(fee.total > 0)) return null;
+
+  const pending = fee.state === "due";
+  async function pay(method) {
+    const { error } = await supabase.rpc("pay_shipping_fee", {
+      p_tk: pkg.tk,
+      p_method: method,
+    });
+    if (error) throw new Error(walletErr(error));
+    emitCBToast(
+      "ok",
+      "Shipping Paid",
+      `${pkg.tk} shipping fee marked as paid.`,
+    );
+    setTick((t) => t + 1);
+    window.dispatchEvent(new Event("focus")); // makes the detail page re-read the TK
+  }
+
+  return (
+    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+      <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
+        <Icons.Wallet size={16} className="text-ink-600/60" />
+        Shipping Payment
+      </h2>
+      <div className="mb-3">
+        <StatusBadge label={pending ? PAY_STATUS.PENDING : PAY_STATUS.PAID} />
+      </div>
+      <div className="space-y-1.5 text-sm">
+        <div className="flex justify-between">
+          <span className="text-ink-600/60">Shipping fee</span>
+          <b>{money(fee.total)}</b>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-ink-600/60">Paid</span>
+          <b>{money(fee.paid)}</b>
+        </div>
+        {pending && (
+          <div className="flex justify-between">
+            <span className="text-ink-600/60">Due</span>
+            <b className="text-[#B87415]">{money(fee.due)}</b>
+          </div>
+        )}
+        {!pending && pkg.paid_at && (
+          <>
+            <div className="flex justify-between">
+              <span className="text-ink-600/60">Paid on</span>
+              <span>{cdDate(pkg.paid_at)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-ink-600/60">By</span>
+              <span>{pkg.paid_by || "—"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-ink-600/60">Method</span>
+              <span>
+                {pkg.paid_method === "wallet" ? "Wallet" : "Cash / Admin"}
+              </span>
+            </div>
+          </>
+        )}
+        {bal !== null && (
+          <div className="flex justify-between border-t border-mist-200 pt-2 mt-2">
+            <span className="text-ink-600/60">Customer wallet</span>
+            <b>{money(bal)}</b>
+          </div>
+        )}
+      </div>
+      {pending && canPay && (
+        <div className="mt-4 space-y-2">
+          <button
+            type="button"
+            disabled={bal === null || bal < fee.due}
+            onClick={() => setConfirm("wallet")}
+            className="h-10 w-full rounded-xl bg-blue-600 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            Pay from Wallet
+          </button>
+          {bal !== null && bal < fee.due && (
+            <p className="text-[11px] text-ink-600/55">
+              Wallet balance is lower than the amount due — top up the customer
+              first.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setConfirm("cash")}
+            className="h-10 w-full rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
+          >
+            Mark as Paid (Cash / Admin)
+          </button>
+        </div>
+      )}
+      <ConfirmModal
+        open={!!confirm}
+        title={confirm === "wallet" ? "Pay from wallet?" : "Mark as Paid?"}
+        message={
+          confirm === "wallet"
+            ? `${money(fee.due)} will be deducted from the customer's wallet and ${pkg.tk} becomes "Shipping Paid".`
+            : `${pkg.tk} becomes "Shipping Paid" without deducting the wallet (use this when payment was received in cash or by transfer).`
+        }
+        confirmLabel={confirm === "wallet" ? "Pay" : "Mark Paid"}
+        onConfirm={() => pay(confirm)}
+        onClose={() => setConfirm(null)}
+      />
+    </div>
+  );
+}
+
+// ============================================================
 // CUSTOMER DETAIL PAGE — /customers/:code
 // Summary header + tabs (Packages-TK / Addresses) so the page
 // never dumps everything at once. Right column = separate small cards.
@@ -28857,24 +29133,34 @@ function CustomerDetailPage() {
   const { code } = useParams();
   const navigate = useNavigate();
   const { rows: whRows } = useWarehouses();
+  const { user } = useAuth();
+  const canTopUp = hasPermission(user, "payment.manage");
   const [tab, setTab] = useState("packages");
+  const [topUp, setTopUp] = useState(false);
+  const [reload, setReload] = useState(0);
   const [state, setState] = useState({
     loading: true,
     cust: null,
     packages: [],
     addrs: [],
+    tx: [],
     error: "",
   });
 
   useEffect(() => {
     let alive = true;
-    setState((s) => ({ ...s, loading: true, error: "" }));
+    setState((s) =>
+      s.cust && s.cust.customer_code === code
+        ? s
+        : { ...s, loading: true, error: "" },
+    );
     if (!supabase) {
       setState({
         loading: false,
         cust: null,
         packages: [],
         addrs: [],
+        tx: [],
         error: "Supabase is not configured.",
       });
       return;
@@ -28892,11 +29178,12 @@ function CustomerDetailPage() {
           cust: null,
           packages: [],
           addrs: [],
+          tx: [],
           error: error?.message || "",
         });
         return;
       }
-      const [p, a] = await Promise.all([
+      const [p, a, t] = await Promise.all([
         supabase
           .from("packages")
           .select("*")
@@ -28908,6 +29195,12 @@ function CustomerDetailPage() {
           .select("*")
           .eq("customer_id", cust.id)
           .order("is_default", { ascending: false }),
+        supabase
+          .from("wallet_transactions")
+          .select("*")
+          .eq("customer_id", String(cust.id))
+          .order("created_at", { ascending: false })
+          .limit(500),
       ]);
       if (!alive) return;
       setState({
@@ -28915,15 +29208,16 @@ function CustomerDetailPage() {
         cust,
         packages: p.data || [],
         addrs: a.data || [],
+        tx: t.data || [],
         error: "",
       });
     })();
     return () => {
       alive = false;
     };
-  }, [code]);
+  }, [code, reload]);
 
-  const { loading, cust, packages, addrs, error } = state;
+  const { loading, cust, packages, addrs, tx, error } = state;
 
   if (!loading && !cust) {
     return (
@@ -28999,18 +29293,83 @@ function CustomerDetailPage() {
     },
     {
       key: "fee",
-      label: "Freight",
+      label: "Shipping Fee",
       search: () => "",
-      render: (r) =>
-        r.freight_fee != null && r.freight_fee !== ""
-          ? money(r.freight_fee)
-          : "—",
+      render: (r) => <ShippingFeeCell row={r} />,
     },
     {
       key: "status",
       label: "Status",
-      render: (r) => <StatusBadge label={r.status || "—"} />,
+      search: (r) => pkgDisplayStatus(r),
+      render: (r) => <StatusBadge label={pkgDisplayStatus(r) || "—"} />,
     },
+  ];
+  const txCols = [
+    {
+      key: "created_at",
+      label: "Date",
+      search: () => "",
+      render: (r) => (
+        <div>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cdAgo(r.created_at)}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "type",
+      label: "Type",
+      search: (r) => r.type,
+      render: (r) =>
+        ({
+          top_up: "Top up",
+          top_up_reversal: "Top up reversed",
+          shipping_payment: "Shipping payment",
+          shipping_payment_cash: "Paid by admin",
+        })[r.type] || r.type,
+    },
+    {
+      key: "tk",
+      label: "TK",
+      render: (r) =>
+        r.tk ? (
+          <Link
+            to={`/packages/${encodeURIComponent(r.tk)}`}
+            className="font-semibold text-blue-700 hover:underline"
+          >
+            {r.tk}
+          </Link>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      search: () => "",
+      render: (r) => {
+        const n = Number(r.amount) || 0;
+        return (
+          <span
+            className={`font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
+          >
+            {n > 0 ? "+" : n < 0 ? "−" : ""}
+            {money(Math.abs(n))}
+          </span>
+        );
+      },
+    },
+    {
+      key: "balance_after",
+      label: "Balance",
+      search: () => "",
+      render: (r) => (r.balance_after != null ? money(r.balance_after) : "—"),
+    },
+    { key: "created_by", label: "By", render: (r) => r.created_by || "—" },
   ];
   const addrCols = [
     {
@@ -29034,6 +29393,7 @@ function CustomerDetailPage() {
 
   const tabs = [
     ["packages", "Packages / TK", packages.length],
+    ["transactions", "Transactions", tx.length],
     ["addresses", "Addresses", addrs.length],
   ];
 
@@ -29047,6 +29407,16 @@ function CustomerDetailPage() {
         >
           <Icons.ChevronLeft size={14} /> Customers
         </button>
+        {topUp && (
+          <TopUpModal
+            customer={cust}
+            onClose={() => setTopUp(false)}
+            onDone={() => {
+              setTopUp(false);
+              setReload((n) => n + 1);
+            }}
+          />
+        )}
 
         {/* Summary header */}
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -29070,10 +29440,11 @@ function CustomerDetailPage() {
           </div>
           <div className="flex flex-wrap gap-5">
             <CdStat
-              label="Total TK"
-              value={packages.length}
+              label="Wallet"
+              value={money(cust.balance || 0)}
               tone="text-blue-700"
             />
+            <CdStat label="Total TK" value={packages.length} />
             <CdStat label="In Progress" value={active} tone="text-amber-600" />
             <CdStat label="Completed" value={done} tone="text-emerald-600" />
           </div>
@@ -29107,6 +29478,13 @@ function CustomerDetailPage() {
                 empty="No packages yet."
               />
             )}
+            {tab === "transactions" && (
+              <CdTable
+                cols={txCols}
+                rows={tx}
+                empty="No wallet transactions yet."
+              />
+            )}
             {tab === "addresses" && (
               <CdTable
                 cols={addrCols}
@@ -29118,6 +29496,21 @@ function CustomerDetailPage() {
 
           {/* Side: separate cards */}
           <div className="space-y-4">
+            <CdCard title="Wallet" icon="Wallet">
+              <div className="text-2xl font-extrabold text-slate-900">
+                {money(cust.balance || 0)}
+              </div>
+              <p className="mt-0.5 text-xs text-slate-400">Available balance</p>
+              {canTopUp && (
+                <button
+                  type="button"
+                  onClick={() => setTopUp(true)}
+                  className="mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-blue-600 text-sm font-bold text-white hover:bg-blue-700"
+                >
+                  <Icons.Plus size={15} /> Top up
+                </button>
+              )}
+            </CdCard>
             <CdCard title="Customer Details" icon="User">
               <CdRow label="Customer ID" value={cust.customer_code} />
               <CdRow label="Registered" value={cdDate(cust.created_at)} />
@@ -29162,6 +29555,618 @@ function CustomerDetailPage() {
   );
 }
 
+// ============================================================
+// WALLET TOP UP (Finance) — standalone page: /wallet-top-up
+// History of every manual top-up + "Create" to top up a customer
+// after searching by Customer ID / name / phone.
+// Uses the existing wallet_top_up RPC (supabase_wallet_payment.sql).
+// ============================================================
+const WTU_RANGES = [
+  ["today", "Today"],
+  ["7d", "Last 7 days"],
+  ["30d", "Last 30 days"],
+  ["all", "All time"],
+];
+function wtuStart(range) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  if (range === "today") return d.getTime();
+  if (range === "7d") return d.getTime() - 6 * 86400000;
+  if (range === "30d") return d.getTime() - 29 * 86400000;
+  return 0;
+}
+
+function WalletTopUpCreateModal({ onClose, onDone }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [customer, setCustomer] = useState(null);
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const reqId = useRef(0);
+  const amt = Number(amount);
+  const valid = !!customer && Number.isFinite(amt) && amt > 0;
+  const field =
+    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+
+  // Debounced customer search (Customer ID / name / phone)
+  useEffect(() => {
+    const term = q.trim();
+    if (customer || term.length < 1 || !supabase) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const my = ++reqId.current;
+    const t = setTimeout(async () => {
+      const safe = term.replace(/[,()%]/g, " ");
+      const { data, error } = await supabase
+        .from("customers")
+        .select("id, customer_code, name, phone, balance")
+        .or(
+          `customer_code.ilike.%${safe}%,name.ilike.%${safe}%,phone.ilike.%${safe}%`,
+        )
+        .limit(8);
+      if (my !== reqId.current) return;
+      setResults(error ? [] : data || []);
+      setSearching(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, customer]);
+
+  async function submit() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase.rpc("wallet_top_up", {
+      p_customer_id: String(customer.id),
+      p_amount: Math.round(amt * 100) / 100,
+      p_note: note.trim() || null,
+    });
+    setBusy(false);
+    if (error) return setErr(walletErr(error));
+    emitCBToast(
+      "ok",
+      "Top up successful",
+      `${money(amt)} added to ${customer.name} (${customer.customer_code}).`,
+    );
+    onDone();
+  }
+
+  return (
+    <WalletModal title="Create Wallet Top Up" onClose={onClose}>
+      <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        Customer ID
+        {customer ? (
+          <div className="mt-1 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-slate-900">
+                {customer.customer_code} · {customer.name}
+              </div>
+              <div className="text-xs font-medium normal-case text-slate-500">
+                {customer.phone || "No phone"} · Balance{" "}
+                <b className="text-slate-800">{money(customer.balance || 0)}</b>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCustomer(null);
+                setQ("");
+              }}
+              className="ml-3 text-slate-400 hover:text-slate-700"
+              title="Change customer"
+            >
+              <Icons.X size={16} />
+            </button>
+          </div>
+        ) : (
+          <div className="relative">
+            <Icons.Search
+              size={15}
+              className="absolute left-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              autoFocus
+              className={`${field} pl-9`}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search Customer ID, name or phone…"
+            />
+            {q.trim() && (
+              <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                {searching && (
+                  <div className="px-3 py-3 text-xs font-medium normal-case text-slate-400">
+                    Searching…
+                  </div>
+                )}
+                {!searching && results.length === 0 && (
+                  <div className="px-3 py-3 text-xs font-medium normal-case text-slate-400">
+                    No customer found.
+                  </div>
+                )}
+                {results.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      setCustomer(c);
+                      setResults([]);
+                    }}
+                    className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-bold normal-case text-slate-900">
+                        {c.customer_code} · {c.name}
+                      </span>
+                      <span className="block text-xs font-medium normal-case text-slate-400">
+                        {c.phone || "No phone"}
+                      </span>
+                    </span>
+                    <span className="ml-3 text-xs font-bold normal-case text-slate-600">
+                      {money(c.balance || 0)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </label>
+
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Amount (USD)
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          className={field}
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.00"
+        />
+      </label>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {[5, 10, 20, 50, 100].map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setAmount(String(v))}
+            className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+          >
+            ${v}
+          </button>
+        ))}
+      </div>
+
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Note (optional)
+        <input
+          className={field}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. ABA transfer, cash"
+        />
+      </label>
+
+      {customer && valid && (
+        <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          New balance:{" "}
+          <b className="text-slate-900">
+            {money(Number(customer.balance || 0) + amt)}
+          </b>
+        </div>
+      )}
+      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!valid || busy}
+          onClick={submit}
+          className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+        >
+          {busy ? "Saving…" : "Top Up"}
+        </button>
+      </div>
+    </WalletModal>
+  );
+}
+
+const reverseErr = (e) =>
+  /function .* does not exist|reversed_at|reversal_of|schema cache/i.test(
+    e?.message || "",
+  )
+    ? `Run supabase_wallet_reverse.sql in Supabase first (then run: notify pgrst, 'reload schema';). Details: ${e?.message || ""}`
+    : e?.message || "Request failed.";
+
+function ReverseTopUpModal({ row, onClose, onDone }) {
+  const { user } = useAuth();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const amt = Math.abs(Number(row.amount) || 0);
+  async function submit() {
+    if (!reason.trim() || busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase.rpc("wallet_reverse_top_up", {
+      p_tx_id: String(row.id),
+      p_reason: reason.trim(),
+      p_by: user?.name || user?.email || "Admin",
+    });
+    setBusy(false);
+    if (error) return setErr(reverseErr(error));
+    emitCBToast(
+      "ok",
+      "Top up reversed",
+      `${money(amt)} deducted from ${row._c?.name || "customer"}.`,
+    );
+    onDone();
+  }
+  return (
+    <WalletModal title="Reverse Top Up" onClose={onClose}>
+      <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-slate-700">
+        <b>{money(amt)}</b> will be deducted from{" "}
+        <b>
+          {row._c?.customer_code} · {row._c?.name}
+        </b>
+        . The original record stays in the history marked as reversed.
+      </div>
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Reason (required)
+        <input
+          autoFocus
+          className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm font-normal normal-case outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. Wrong customer / wrong amount"
+        />
+      </label>
+      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={submit}
+          className="h-10 rounded-xl bg-red-600 px-5 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-40"
+        >
+          {busy ? "Saving…" : "Reverse"}
+        </button>
+      </div>
+    </WalletModal>
+  );
+}
+
+function WalletTopUpPage() {
+  const { user } = useAuth();
+  const canTopUp = hasPermission(user, "payment.manage");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [range, setRange] = useState("today");
+  const [create, setCreate] = useState(false);
+  const [reverse, setReverse] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) {
+      setLoading(false);
+      setError("Supabase is not configured.");
+      return;
+    }
+    setLoading(true);
+    (async () => {
+      const { data: tx, error: e1 } = await supabase
+        .from("wallet_transactions")
+        .select("*")
+        .in("type", ["top_up", "top_up_reversal"])
+        .order("created_at", { ascending: false })
+        .limit(1000);
+      if (!alive) return;
+      if (e1) {
+        setError(walletErr(e1));
+        setLoading(false);
+        return;
+      }
+      const ids = [...new Set((tx || []).map((r) => r.customer_id))].filter(
+        Boolean,
+      );
+      const byId = {};
+      for (let i = 0; i < ids.length; i += 100) {
+        const { data } = await supabase
+          .from("customers")
+          .select("id, customer_code, name, phone")
+          .in("id", ids.slice(i, i + 100));
+        (data || []).forEach((c) => (byId[String(c.id)] = c));
+      }
+      if (!alive) return;
+      setRows(
+        (tx || []).map((r) => ({ ...r, _c: byId[String(r.customer_id)] })),
+      );
+      setError("");
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  const shown = useMemo(() => {
+    const from = wtuStart(range);
+    const s = search.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (from && new Date(r.created_at).getTime() < from) return false;
+      if (!s) return true;
+      return [r._c?.customer_code, r._c?.name, r._c?.phone, r.note]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(s));
+    });
+  }, [rows, search, range]);
+
+  const total = shown.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+  const customers = new Set(shown.map((r) => r.customer_id)).size;
+  const hasFilter = search || range !== "today";
+  const stat = (icon, tone, label, value) => {
+    const Ic = Icons[icon];
+    return (
+      <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div
+          className={`flex h-12 w-12 items-center justify-center rounded-xl text-white ${tone}`}
+        >
+          <Ic size={20} />
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-slate-500">{label}</div>
+          <div className="text-xl font-extrabold text-slate-900">{value}</div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="mx-auto max-w-7xl">
+      <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
+        Wallet Top Up
+      </h1>
+
+      <div className="mb-5 grid gap-4 sm:grid-cols-3">
+        {stat("ArrowDownToLine", "bg-blue-500", "Net Top Up", money(total))}
+        {stat("Receipt", "bg-emerald-500", "Transactions", shown.length)}
+        {stat("Users", "bg-violet-500", "Customers", customers)}
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+            <Icons.Search
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search Customer ID, name, phone…"
+              className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
+          <select
+            value={range}
+            onChange={(e) => setRange(e.target.value)}
+            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+          >
+            {WTU_RANGES.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setRange("today");
+              }}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-red-50 px-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+            >
+              <Icons.X size={14} /> Clear
+            </button>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {canTopUp && (
+              <button
+                type="button"
+                onClick={() => setCreate(true)}
+                className="flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700"
+              >
+                <Icons.Plus size={16} /> Create
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setReload((n) => n + 1)}
+              title="Refresh"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                {[
+                  "Date",
+                  "Customer ID",
+                  "Customer Name",
+                  "Amount",
+                  "Balance After",
+                  "Note",
+                  "By",
+                  "",
+                ].map((h) => (
+                  <th key={h} className="px-4 py-3">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading && rows.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-4 py-10 text-center text-slate-400"
+                  >
+                    Loading…
+                  </td>
+                </tr>
+              )}
+              {error && (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-4 py-10 text-center font-semibold text-red-600"
+                  >
+                    {error}
+                  </td>
+                </tr>
+              )}
+              {!loading && !error && shown.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-4 py-10 text-center text-slate-400"
+                  >
+                    No top-ups found.
+                  </td>
+                </tr>
+              )}
+              {shown.map((r) => (
+                <tr key={r.id} className="hover:bg-slate-50/70">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-slate-800">
+                      {cdDate(r.created_at)}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {new Date(r.created_at).toLocaleTimeString("en-US", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 font-semibold text-blue-700">
+                    {r._c?.customer_code ? (
+                      <Link
+                        to={`/customers/${encodeURIComponent(r._c.customer_code)}`}
+                        className="hover:underline"
+                      >
+                        {r._c.customer_code}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-slate-800">
+                    {r._c?.name || "—"}
+                  </td>
+                  <td className="px-4 py-3 font-bold">
+                    {r.type === "top_up_reversal" ? (
+                      <span className="text-red-600">
+                        −{money(Math.abs(Number(r.amount) || 0))}
+                      </span>
+                    ) : r.reversed_at ? (
+                      <span className="text-slate-400 line-through">
+                        +{money(Math.abs(Number(r.amount) || 0))}
+                      </span>
+                    ) : (
+                      <span className="text-emerald-600">
+                        +{money(Math.abs(Number(r.amount) || 0))}
+                      </span>
+                    )}
+                    {r.type === "top_up_reversal" && (
+                      <span className="ml-2 rounded-md bg-red-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-600">
+                        Reversal
+                      </span>
+                    )}
+                    {r.reversed_at && (
+                      <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
+                        Reversed
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
+                    {r.balance_after != null ? money(r.balance_after) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">{r.note || "—"}</td>
+                  <td className="px-4 py-3 text-slate-500">
+                    {r.created_by || "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {canTopUp && r.type === "top_up" && !r.reversed_at && (
+                      <button
+                        type="button"
+                        onClick={() => setReverse(r)}
+                        className="h-8 rounded-lg border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50"
+                      >
+                        Reverse
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {reverse && (
+        <ReverseTopUpModal
+          row={reverse}
+          onClose={() => setReverse(null)}
+          onDone={() => {
+            setReverse(null);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+      {create && (
+        <WalletTopUpCreateModal
+          onClose={() => setCreate(false)}
+          onDone={() => {
+            setCreate(false);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function AdminApp() {
   return (
     <PackageTrackingProvider>
@@ -29193,6 +30198,7 @@ function AdminApp() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/reports" element={<ReportsHubPage />} />
           <Route path="/customers/:code" element={<CustomerDetailPage />} />
+          <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
           <Route path="/reports/:key" element={<ReportsPage />} />
           <Route path="/notifications" element={<NotificationCenterPage />} />
           <Route
@@ -29211,6 +30217,7 @@ function AdminApp() {
                 "/containers",
                 "/roles",
                 "/settings",
+                "/wallet-top-up",
               ].includes(item.path),
           ).map((item) => {
             const config = MODULES[item.path];
