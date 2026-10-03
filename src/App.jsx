@@ -2430,6 +2430,7 @@ function createLocalOrder(customer, platform, route = {}) {
     platform: platform || null,
     china_wh_code: route.china || null,
     kh_branch_code: route.kh || null,
+    customer_address_id: route.addressId || null,
     status: "New",
     date: formatNowTimestamp(),
     created_at: new Date().toISOString(),
@@ -2447,6 +2448,7 @@ async function createOrderRemote(customer, platform, route = {}) {
       platform: platform || null,
       china_wh_code: route.china || null,
       kh_branch_code: route.kh || null,
+      customer_address_id: route.addressId || null,
       date: formatNowTimestamp(),
       status: "New",
     })
@@ -2816,6 +2818,134 @@ async function readCustomerDefaults(customerCode) {
     // Keep whatever the local fallback produced.
   }
   return { china, kh };
+}
+
+// Resolve the customer receiving location for a new Inbound.
+// If the customer has no saved address yet, create one automatically from the
+// active Cambodia default/central branch. The created address is marked as a
+// SYSTEM location so staff can distinguish it from a customer-entered address.
+async function ensureCustomerInboundAddress(
+  customer,
+  requestedBranch,
+  whList = [],
+  userName = "System",
+) {
+  if (!customer?.id) throw new Error("Customer ID មិនត្រឹមត្រូវ");
+
+  const activeBranches = (whList || []).filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+
+  const centralBranch =
+    activeBranches.find((w) => String(w.code).toUpperCase() === "KH-PP-01") ||
+    activeBranches.find((w) =>
+      /central|កណ្តាល|phnom\s*penh/i.test(
+        `${w.name || ""} ${w.province || ""}`,
+      ),
+    ) ||
+    activeBranches[0] ||
+    null;
+
+  let branchCode = requestedBranch || customer.default_kh_branch || "";
+  let branch = activeBranches.find((w) => w.code === branchCode) || null;
+
+  if (!branch && branchCode) {
+    branch = (whList || []).find((w) => w.code === branchCode) || null;
+  }
+  if (!branch) {
+    branch = centralBranch;
+    branchCode = branch?.code || "";
+  }
+  if (!branchCode) {
+    throw new Error(
+      "មិនទាន់មាន Cambodia Receiving Branch Active សម្រាប់បង្កើត Location",
+    );
+  }
+
+  if (!supabase) {
+    return {
+      id: null,
+      branchCode,
+      branch,
+      autoCreated: false,
+    };
+  }
+
+  // First use an existing default address. This prevents duplicate automatic
+  // locations on every inbound for the same customer.
+  const { data: existing, error: existingErr } = await supabase
+    .from("customer_addresses")
+    .select("*")
+    .eq("customer_id", customer.id)
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: true })
+    .limit(50);
+  if (existingErr) throw existingErr;
+
+  const preferred = requestedBranch
+    ? (existing || []).find((a) => a.kh_branch_code === branchCode) || null
+    : (existing || []).find((a) => a.is_default) ||
+      (existing || []).find((a) => a.kh_branch_code === branchCode) ||
+      null;
+
+  if (preferred) {
+    return {
+      id: preferred.id,
+      branchCode: preferred.kh_branch_code || branchCode,
+      branch:
+        (whList || []).find(
+          (w) => w.code === (preferred.kh_branch_code || branchCode),
+        ) || branch,
+      autoCreated: false,
+      address: preferred,
+    };
+  }
+
+  // No matching location exists: create one from the selected/default branch.
+  if ((existing || []).length) {
+    const { error: clearDefaultErr } = await supabase
+      .from("customer_addresses")
+      .update({ is_default: false })
+      .eq("customer_id", customer.id);
+    if (clearDefaultErr) throw clearDefaultErr;
+  }
+  const row = {
+    customer_id: customer.id,
+    label: `${branch.name || "Central Branch"} (Auto)`,
+    recipient_name: customer.name || "",
+    phone: customer.phone || "",
+    province: branch.province || "",
+    district: branch.district || "",
+    commune: branch.commune || "",
+    address: branch.address || branch.name || "",
+    additional_info:
+      "Auto-created by Inbound because customer had no saved location.",
+    is_default: true,
+    kh_branch_code: branchCode,
+    source: "SYSTEM",
+    is_system_default: true,
+    created_by: userName || "System",
+  };
+  const { data: created, error: createErr } = await supabase
+    .from("customer_addresses")
+    .insert(row)
+    .select("*")
+    .single();
+  if (createErr) throw createErr;
+
+  // Keep the customer default in sync so future Inbounds reuse this location.
+  await supabase
+    .from("customers")
+    .update({ default_kh_branch: branchCode })
+    .eq("id", customer.id);
+
+  return {
+    id: created.id,
+    branchCode,
+    branch,
+    autoCreated: true,
+    address: created,
+  };
 }
 
 async function saveCustomerDefaults(customerCode, patch) {
@@ -5086,8 +5216,11 @@ function blankInboundForm(user) {
     weight: "",
     packageCount: "1",
     // Order ID is NEVER picked or typed: every inbound gets a brand-new
-    // Order created at Save. Only the Cambodia receiving branch is chosen.
+    // Order created at Save. Receiving location is resolved from the
+    // customer's saved address; if none exists, the system creates one
+    // from the default/central Cambodia branch.
     khBranch: "",
+    customerAddressId: "",
   };
 }
 
@@ -5183,8 +5316,6 @@ function CreatePackageModal({ open, onClose, onCreated }) {
       return setError(
         "Customer Not Found — សូមផ្ទៀងផ្ទាត់ Customer ID ដែលមានក្នុងប្រព័ន្ធ",
       );
-    const routeProblem = validateOrderRoute(f.warehouse, f.khBranch, whList);
-    if (routeProblem) return setError(routeProblem);
     if (photos.length === 0)
       return setError("ត្រូវការរូបភាពទំនិញ យ៉ាងតិច ១ សន្លឹក");
     if (!f.cargoType) return setError("Please select Cargo Type");
@@ -5208,6 +5339,27 @@ function CreatePackageModal({ open, onClose, onCreated }) {
     if (override.on && !(override.value !== "" && overrideNum >= 0))
       return setError("តម្លៃ Override មិនត្រឹមត្រូវ");
 
+    // Only create the fallback location after all Inbound validation passes,
+    // so a failed form cannot leave an unused Customer Location behind.
+    let resolvedLocation = null;
+    try {
+      resolvedLocation = await ensureCustomerInboundAddress(
+        f.customer,
+        f.khBranch,
+        whList,
+        user?.name || "System",
+      );
+    } catch (err) {
+      return setError(err?.message || "មិនអាចកំណត់ Customer Location បាន");
+    }
+    const resolvedKhBranch = resolvedLocation.branchCode;
+    const routeProblem = validateOrderRoute(
+      f.warehouse,
+      resolvedKhBranch,
+      whList,
+    );
+    if (routeProblem) return setError(routeProblem);
+
     const userName = user?.name || "Admin";
     const nowIso = new Date().toISOString();
     setSaving(true);
@@ -5216,7 +5368,11 @@ function CreatePackageModal({ open, onClose, onCreated }) {
     try {
       // EVERY new inbound creates its own brand-new Order (THN######) here,
       // through the existing sequence / local registry — never reused.
-      const route = { china: f.warehouse, kh: f.khBranch };
+      const route = {
+        china: f.warehouse,
+        kh: resolvedKhBranch,
+        addressId: resolvedLocation?.id || null,
+      };
       newOrder = supabase
         ? await createOrderRemote(f.customer, "", route)
         : createLocalOrder(f.customer, "", route);
@@ -5444,12 +5600,16 @@ function CreatePackageModal({ open, onClose, onCreated }) {
           </div>
           <WarehouseSelect
             label="Cambodia Receiving Branch"
-            hint="សាខាដែលអតិថិជនទទួលទំនិញ"
+            hint="បើ Customer មិនទាន់មាន Location ប្រព័ន្ធនឹងបង្កើត Location ស្វ័យប្រវត្តិ ដោយយកសាខាកណ្តាលជាគោល"
             type="cambodia"
             value={f.khBranch}
             onChange={(v) => setF((x) => ({ ...x, khBranch: v }))}
             list={whList}
           />
+          <p className="text-[11px] text-ink-600/55 -mt-1">
+            Location របស់ Customer នឹងត្រូវរក្សាទុកជាមួយ Order
+            ដើម្បីរក្សាប្រវត្តិទីតាំងឲ្យត្រឹមត្រូវ។
+          </p>
         </section>
 
         <section className="space-y-3.5">
@@ -14634,6 +14794,278 @@ function PhotoGallery({ tk }) {
   );
 }
 
+function ChangeInternalWarehouseModal({
+  open,
+  onClose,
+  tk,
+  customerId,
+  currentBranchCode,
+  currentAddressId,
+  warehouses = [],
+  user,
+  savePackage,
+  onSaved,
+}) {
+  const [addresses, setAddresses] = useState(null);
+  const [selectedId, setSelectedId] = useState(currentAddressId || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const branches = (warehouses || []).filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedId(currentAddressId || "");
+    setError("");
+    setAddresses(null);
+    if (!supabase || !customerId) {
+      setAddresses([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const { data, error: err } = await supabase
+        .from("customer_addresses")
+        .select(
+          "id,label,recipient_name,phone,province,district,commune,address,kh_branch_code,is_default,source",
+        )
+        .eq("customer_id", customerId)
+        .order("is_default", { ascending: false })
+        .order("created_at", { ascending: true });
+      if (!alive) return;
+      if (err) {
+        setError(err.message || "Unable to load customer locations");
+        setAddresses([]);
+        return;
+      }
+      setAddresses(data || []);
+      if (!currentAddressId && data?.[0]?.id) setSelectedId(data[0].id);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, customerId, currentAddressId]);
+
+  if (!open) return null;
+
+  const hasTwoLocations = (addresses?.length || 0) >= 2;
+  const currentAddress =
+    addresses?.find((a) => a.id === currentAddressId) || null;
+  const selectedAddress = addresses?.find((a) => a.id === selectedId) || null;
+  const selectedBranch =
+    branches.find((b) => b.code === selectedAddress?.kh_branch_code) || null;
+  const canConfirm =
+    hasTwoLocations &&
+    !!selectedAddress &&
+    selectedAddress.id !== currentAddressId &&
+    !!selectedAddress.kh_branch_code &&
+    !busy;
+
+  async function confirm() {
+    if (!canConfirm) return;
+    setBusy(true);
+    setError("");
+    try {
+      const patch = {
+        dest_branch_code: selectedAddress.kh_branch_code,
+        customer_address_id: selectedAddress.id,
+        updated_by: user?.name || "System",
+        updated_at: new Date().toISOString(),
+      };
+      const saved = await savePackage?.(patchWithTk(tk, patch));
+      if (!saved) throw new Error("Package update failed.");
+      onSaved?.({
+        ...saved,
+        dest_branch_code: selectedAddress.kh_branch_code,
+        customer_address_id: selectedAddress.id,
+      });
+      emitCBToast(
+        "ok",
+        "Internal Warehouse updated",
+        `${tk} → ${selectedAddress.kh_branch_code}`,
+      );
+      onClose();
+    } catch (err) {
+      setError(err?.message || "មិនអាចប្តូរ Internal Warehouse បានទេ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function patchWithTk(tkValue, patch) {
+    return { tk: tkValue, ...patch };
+  }
+
+  const addressText = (a) =>
+    [a?.address, a?.commune, a?.district, a?.province]
+      .filter(Boolean)
+      .join(", ") || "No detailed address";
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] bg-ink-900/40 flex items-center justify-center p-4"
+      onMouseDown={onClose}
+    >
+      <div
+        className="bg-white rounded-xl shadow-2xl border border-mist-200 w-full max-w-xl max-h-[88vh] overflow-hidden"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
+          <div>
+            <h3 className="font-display font-bold text-lg text-ink-900">
+              Change Internal Warehouse
+            </h3>
+            <p className="text-xs text-ink-600/45 mt-0.5">
+              Internal Warehouse = Cambodia receiving branch selected by the
+              customer.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-ink-600/40 hover:text-ink-900"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh]">
+          {error && (
+            <div className="rounded-lg bg-signal-red/10 text-signal-red text-sm px-3 py-2">
+              {error}
+            </div>
+          )}
+          <div className="rounded-lg bg-signal-blue/5 border border-signal-blue/15 px-3 py-2.5 text-xs text-ink-700">
+            <b>Rule:</b> Customer must have at least <b>2 saved locations</b>{" "}
+            before this TK can be moved to another receiving branch.
+          </div>
+          {addresses === null ? (
+            <div className="py-8 text-center text-sm text-ink-600/45">
+              Loading customer locations…
+            </div>
+          ) : !hasTwoLocations ? (
+            <div className="rounded-lg border border-dashed border-mist-200 p-6 text-center">
+              <Icons.MapPin
+                size={28}
+                className="mx-auto text-ink-600/25 mb-2"
+              />
+              <div className="text-sm font-semibold text-ink-900">
+                Not enough saved locations
+              </div>
+              <p className="text-xs text-ink-600/50 mt-1">
+                This customer has {addresses.length} saved location
+                {addresses.length === 1 ? "" : "s"}. Add a second location
+                first.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
+                  Current Internal Warehouse
+                </div>
+                <div className="rounded-lg border border-mist-200 bg-mist-50 px-3 py-3">
+                  <div className="text-sm font-semibold text-ink-900">
+                    {currentBranchCode || currentAddress?.kh_branch_code || "—"}{" "}
+                    ·{" "}
+                    {whName(
+                      warehouses,
+                      currentBranchCode || currentAddress?.kh_branch_code,
+                    ) || "Cambodia Branch"}
+                  </div>
+                  <div className="text-xs text-ink-600/50 mt-1">
+                    {currentAddress
+                      ? `${currentAddress.label} · ${addressText(currentAddress)}`
+                      : "Current TK branch"}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
+                  Customer Saved Locations
+                </div>
+                <div className="space-y-2">
+                  {addresses.map((a) => {
+                    const branch =
+                      branches.find((b) => b.code === a.kh_branch_code) || null;
+                    const isCurrent =
+                      a.id === currentAddressId ||
+                      (!currentAddressId &&
+                        a.kh_branch_code === currentBranchCode);
+                    return (
+                      <label
+                        key={a.id}
+                        className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition ${selectedId === a.id ? "border-signal-blue bg-signal-blue/5" : "border-mist-200 hover:border-signal-blue/40"}`}
+                      >
+                        <input
+                          type="radio"
+                          name="internal-warehouse-location"
+                          checked={selectedId === a.id}
+                          onChange={() => setSelectedId(a.id)}
+                          className="mt-1"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-ink-900">
+                              {a.label || "Customer Location"}
+                            </span>
+                            {a.is_default && (
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-signal-teal/10 text-signal-teal">
+                                Primary
+                              </span>
+                            )}
+                            {isCurrent && (
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-mist-100 text-ink-600">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs font-semibold text-signal-blue mt-1">
+                            {a.kh_branch_code || "No branch"} ·{" "}
+                            {branch?.name || "Unknown Cambodia Branch"}
+                          </div>
+                          <div className="text-xs text-ink-600/50 mt-1">
+                            {addressText(a)}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              {selectedAddress && (
+                <div className="rounded-lg bg-signal-teal/5 border border-signal-teal/15 px-3 py-2 text-xs text-ink-700">
+                  New Internal Warehouse:{" "}
+                  <b>{selectedAddress.kh_branch_code}</b> ·{" "}
+                  {selectedBranch?.name || "Cambodia Branch"}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm font-medium text-ink-700 px-4 py-2 rounded-md hover:bg-mist-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!canConfirm}
+            onClick={confirm}
+            className="bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {busy ? "Saving…" : "Confirm Change"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PackageDetail() {
   const { tk } = useParams();
   const { user } = useAuth();
@@ -14643,6 +15075,7 @@ function PackageDetail() {
     loadDbHistory,
     advance,
     findPackage,
+    upsertPackage,
     ready: pkgReady,
   } = usePackageTracking();
   // A TK scanned through Inbound/Outbound Origin lives in the shared
@@ -14756,6 +15189,10 @@ function PackageDetail() {
   // click it forward.
   const canProcessStatus = hasPermission(user, "tk.process");
   const canManageInbound = hasPermission(user, "tk.manage_inbound");
+  const canChangeInternalWarehouse =
+    hasPermission(user, "order.change_branch") || canManageInbound;
+  const { rows: packageWarehouses } = useWarehouses();
+  const [showInternalWarehouse, setShowInternalWarehouse] = useState(false);
   const isCustomerRole = user?.role === "Customer";
   const isInboundStage = currentStage === "Inbound Origin";
   // Print Label is available once the TK reaches Cambodia (Arrived Destination or later).
@@ -14785,6 +15222,8 @@ function PackageDetail() {
     data.customerId && data.customerId !== "—"
       ? `${data.customerId} · ${data.customer}`
       : data.customer;
+  const customerAddressId =
+    data.customer_address_id || data.customerAddressId || null;
 
   function handleAdvance() {
     // Belt-and-suspenders: the button itself is already hidden for
@@ -15035,6 +15474,16 @@ function PackageDetail() {
                   >
                     <Icons.Printer size={14} />
                     Print Label
+                  </button>
+                )}
+                {canChangeInternalWarehouse && data.customer_id && (
+                  <button
+                    type="button"
+                    onClick={() => setShowInternalWarehouse(true)}
+                    className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
+                  >
+                    <Icons.MapPin size={14} />
+                    Internal Warehouse
                   </button>
                 )}
                 <button
@@ -15435,8 +15884,21 @@ function PackageDetail() {
                   span: true,
                 },
                 {
-                  label: "Destination (Cambodia Branch)",
-                  value: <WhLabel code={data.dest_branch_code} />,
+                  label: "Internal Warehouse (Cambodia Branch)",
+                  value: (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <WhLabel code={data.dest_branch_code} />
+                      {canChangeInternalWarehouse && data.customer_id && (
+                        <button
+                          type="button"
+                          onClick={() => setShowInternalWarehouse(true)}
+                          className="text-[11px] text-signal-blue hover:underline"
+                        >
+                          Change
+                        </button>
+                      )}
+                    </div>
+                  ),
                   span: true,
                 },
                 { label: "Inbound Date", value: createdAt, span: true },
@@ -15534,6 +15996,22 @@ function PackageDetail() {
         </div>
       </div>
 
+      {canChangeInternalWarehouse && data.customer_id && (
+        <ChangeInternalWarehouseModal
+          open={showInternalWarehouse}
+          onClose={() => setShowInternalWarehouse(false)}
+          tk={data.tk}
+          customerId={data.customer_id}
+          currentBranchCode={data.dest_branch_code}
+          currentAddressId={customerAddressId}
+          warehouses={packageWarehouses}
+          user={user}
+          savePackage={upsertPackage}
+          onSaved={(saved) => {
+            setLivePackage((prev) => ({ ...(prev || data), ...saved }));
+          }}
+        />
+      )}
       <TransferPackageModal
         open={showTransfer}
         tk={data.tk}
@@ -29079,14 +29557,648 @@ function CdTable({ cols, rows, empty, loading, stages }) {
   );
 }
 
+function CustomerAddressCreateModal({ customer, warehouses, onClose, onDone }) {
+  const canSave = !!customer?.id;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({
+    label: "",
+    recipient_name: customer?.name || "",
+    phone: customer?.phone || "",
+    province: "",
+    district: "",
+    commune: "",
+    address: "",
+    additional_info: "",
+    kh_branch_code: customer?.default_kh_branch || "",
+    is_default: true,
+  });
+
+  const branches = (warehouses || []).filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+  const set = (k, v) => setForm((x) => ({ ...x, [k]: v }));
+  const selectedBranch = branches.find((w) => w.code === form.kh_branch_code);
+
+  useEffect(() => {
+    if (form.kh_branch_code || !branches.length) return;
+    const central =
+      branches.find((w) => String(w.code).toUpperCase() === "KH-PP-01") ||
+      branches.find((w) =>
+        /central|កណ្តាល|phnom\s*penh/i.test(
+          `${w.name || ""} ${w.province || ""}`,
+        ),
+      ) ||
+      branches[0];
+    if (central) {
+      setForm((x) => ({
+        ...x,
+        kh_branch_code: central.code,
+        province: x.province || central.province || "",
+        district: x.district || central.district || "",
+        commune: x.commune || central.commune || "",
+        address: x.address || central.address || central.name || "",
+      }));
+    }
+  }, [branches.length, form.kh_branch_code]);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!canSave || busy) return;
+    setError("");
+    if (!String(form.label).trim()) return setError("Location Name ត្រូវការ");
+    if (!form.kh_branch_code) return setError("សូមជ្រើស Cambodia Branch");
+    setBusy(true);
+    const row = {
+      customer_id: customer.id,
+      label: String(form.label).trim(),
+      recipient_name: String(form.recipient_name || "").trim(),
+      phone: String(form.phone || "").trim(),
+      province: String(form.province || "").trim(),
+      district: String(form.district || "").trim(),
+      commune: String(form.commune || "").trim(),
+      address: String(form.address || "").trim(),
+      additional_info: String(form.additional_info || "").trim() || null,
+      is_default: !!form.is_default,
+      kh_branch_code: form.kh_branch_code,
+      source: "STAFF",
+      is_system_default: false,
+      created_by: null,
+    };
+    try {
+      if (form.is_default) {
+        const { error: clearErr } = await supabase
+          .from("customer_addresses")
+          .update({ is_default: false })
+          .eq("customer_id", customer.id);
+        if (clearErr) throw clearErr;
+      }
+      const { data, error: insErr } = await supabase
+        .from("customer_addresses")
+        .insert(row)
+        .select("*")
+        .single();
+      if (insErr) throw insErr;
+      if (form.is_default) {
+        await supabase
+          .from("customers")
+          .update({ default_kh_branch: form.kh_branch_code })
+          .eq("id", customer.id);
+      }
+      onDone(data);
+    } catch (err) {
+      setError(err?.message || "មិនអាចបង្កើត Location បានទេ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-slate-900/40 flex items-center justify-center p-4"
+      onMouseDown={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div>
+            <div className="text-lg font-extrabold text-slate-900">
+              Create Customer Location
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {customer.customer_code} · {customer.name}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 w-9 grid place-items-center rounded-lg hover:bg-slate-100 text-slate-500"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 grid gap-4 sm:grid-cols-2">
+          {error && (
+            <div className="sm:col-span-2 rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+          <label className="text-xs font-bold text-slate-600">
+            Location Name *
+            <input
+              value={form.label}
+              onChange={(e) => set("label", e.target.value)}
+              placeholder="Home / Office / Warehouse"
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Recipient Name
+            <input
+              value={form.recipient_name}
+              onChange={(e) => set("recipient_name", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Phone
+            <input
+              value={form.phone}
+              onChange={(e) => set("phone", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Cambodia Branch *
+            <select
+              value={form.kh_branch_code}
+              onChange={(e) => {
+                const v = e.target.value;
+                const b = branches.find((x) => x.code === v);
+                setForm((x) => ({
+                  ...x,
+                  kh_branch_code: v,
+                  province: x.province || b?.province || "",
+                  district: x.district || b?.district || "",
+                  commune: x.commune || b?.commune || "",
+                  address: x.address || b?.address || b?.name || "",
+                }));
+              }}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            >
+              <option value="">Select branch</option>
+              {branches.map((b) => (
+                <option key={b.code} value={b.code}>
+                  {b.code} · {b.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Province
+            <input
+              value={form.province}
+              onChange={(e) => set("province", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            District
+            <input
+              value={form.district}
+              onChange={(e) => set("district", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Commune
+            <input
+              value={form.commune}
+              onChange={(e) => set("commune", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+            Detailed Address
+            <textarea
+              value={form.address}
+              onChange={(e) => set("address", e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+            Note
+            <textarea
+              value={form.additional_info}
+              onChange={(e) => set("additional_info", e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="sm:col-span-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.is_default}
+              onChange={(e) => set("is_default", e.target.checked)}
+            />{" "}
+            Set as Primary Location
+          </label>
+          {selectedBranch && (
+            <div className="sm:col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              Receiving branch:{" "}
+              <b>
+                {selectedBranch.code} · {selectedBranch.name}
+              </b>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60"
+          >
+            {busy ? "Creating…" : "Create Location"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function CustomerAddressEditModal({
+  customer,
+  warehouses,
+  address,
+  onClose,
+  onDone,
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState(() => ({
+    label: address?.label || "",
+    recipient_name: address?.recipient_name || customer?.name || "",
+    phone: address?.phone || customer?.phone || "",
+    province: address?.province || "",
+    district: address?.district || "",
+    commune: address?.commune || "",
+    address: address?.address || "",
+    additional_info: address?.additional_info || "",
+    kh_branch_code:
+      address?.kh_branch_code || customer?.default_kh_branch || "",
+    is_default: !!address?.is_default,
+  }));
+  const branches = (warehouses || []).filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+  const set = (k, v) => setForm((x) => ({ ...x, [k]: v }));
+  const selectedBranch = branches.find((w) => w.code === form.kh_branch_code);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!address?.id || busy) return;
+    setError("");
+    if (!String(form.label).trim()) return setError("Location Name ត្រូវការ");
+    if (!form.kh_branch_code) return setError("សូមជ្រើស Cambodia Branch");
+    setBusy(true);
+    try {
+      if (form.is_default) {
+        const { error: clearErr } = await supabase
+          .from("customer_addresses")
+          .update({ is_default: false })
+          .eq("customer_id", customer.id)
+          .neq("id", address.id);
+        if (clearErr) throw clearErr;
+      }
+      const patch = {
+        label: String(form.label).trim(),
+        recipient_name: String(form.recipient_name || "").trim(),
+        phone: String(form.phone || "").trim(),
+        province: String(form.province || "").trim(),
+        district: String(form.district || "").trim(),
+        commune: String(form.commune || "").trim(),
+        address: String(form.address || "").trim(),
+        additional_info: String(form.additional_info || "").trim() || null,
+        kh_branch_code: form.kh_branch_code,
+        is_default: !!form.is_default,
+      };
+      const { data, error: updErr } = await supabase
+        .from("customer_addresses")
+        .update(patch)
+        .eq("id", address.id)
+        .select("*")
+        .single();
+      if (updErr) throw updErr;
+      if (form.is_default) {
+        const { error: custErr } = await supabase
+          .from("customers")
+          .update({ default_kh_branch: form.kh_branch_code })
+          .eq("id", customer.id);
+        if (custErr) throw custErr;
+      }
+      onDone(data);
+    } catch (err) {
+      setError(err?.message || "មិនអាច Update Location បានទេ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-slate-900/40 flex items-center justify-center p-4"
+      onMouseDown={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div>
+            <div className="text-lg font-extrabold text-slate-900">
+              Edit Customer Location
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {customer.customer_code} · {customer.name}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 w-9 grid place-items-center rounded-lg hover:bg-slate-100 text-slate-500"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 grid gap-4 sm:grid-cols-2">
+          {error && (
+            <div className="sm:col-span-2 rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+          <label className="text-xs font-bold text-slate-600">
+            Location Name *
+            <input
+              value={form.label}
+              onChange={(e) => set("label", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Recipient Name
+            <input
+              value={form.recipient_name}
+              onChange={(e) => set("recipient_name", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Phone
+            <input
+              value={form.phone}
+              onChange={(e) => set("phone", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Cambodia Branch *
+            <select
+              value={form.kh_branch_code}
+              onChange={(e) => set("kh_branch_code", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            >
+              <option value="">Select branch</option>
+              {branches.map((b) => (
+                <option key={b.code} value={b.code}>
+                  {b.code} · {b.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Province
+            <input
+              value={form.province}
+              onChange={(e) => set("province", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            District
+            <input
+              value={form.district}
+              onChange={(e) => set("district", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-600">
+            Commune
+            <input
+              value={form.commune}
+              onChange={(e) => set("commune", e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+            Detailed Address
+            <textarea
+              value={form.address}
+              onChange={(e) => set("address", e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+            Note
+            <textarea
+              value={form.additional_info}
+              onChange={(e) => set("additional_info", e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="sm:col-span-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.is_default}
+              onChange={(e) => set("is_default", e.target.checked)}
+            />{" "}
+            Set as Primary Location
+          </label>
+          {selectedBranch && (
+            <div className="sm:col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              Receiving branch:{" "}
+              <b>
+                {selectedBranch.code} · {selectedBranch.name}
+              </b>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60"
+          >
+            {busy ? "Updating…" : "Update Location"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function CustomerWarehouseRouteModal({
+  customer,
+  warehouses,
+  onClose,
+  onDone,
+}) {
+  const [china, setChina] = useState(
+    customer?.default_china_wh || customer?.warehouse || "",
+  );
+  const [kh, setKh] = useState(customer?.default_kh_branch || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const chinaRows = (warehouses || []).filter(
+    (w) => w.type === "china" && w.status === "Active",
+  );
+  const khRows = (warehouses || []).filter(
+    (w) => w.type === "cambodia" && w.status === "Active",
+  );
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!customer?.id || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { error: updErr } = await supabase
+        .from("customers")
+        .update({
+          default_china_wh: china || null,
+          default_kh_branch: kh || null,
+        })
+        .eq("id", customer.id);
+      if (updErr) throw updErr;
+      onDone({
+        default_china_wh: china || null,
+        default_kh_branch: kh || null,
+      });
+    } catch (err) {
+      setError(err?.message || "មិនអាច Update Warehouse Route បានទេ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-slate-900/40 flex items-center justify-center p-4"
+      onMouseDown={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-slate-200"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div>
+            <div className="text-lg font-extrabold text-slate-900">
+              Edit Warehouse Route
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {customer.customer_code} · {customer.name}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 w-9 grid place-items-center rounded-lg hover:bg-slate-100 text-slate-500"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          {error && (
+            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+          <label className="block text-xs font-bold text-slate-600">
+            China Warehouse
+            <select
+              value={china}
+              onChange={(e) => setChina(e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            >
+              <option value="">Not assigned</option>
+              {chinaRows.map((w) => (
+                <option key={w.code} value={w.code}>
+                  {w.code} · {w.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs font-bold text-slate-600">
+            Cambodia Branch
+            <select
+              value={kh}
+              onChange={(e) => setKh(e.target.value)}
+              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+            >
+              <option value="">Not assigned</option>
+              {khRows.map((w) => (
+                <option key={w.code} value={w.code}>
+                  {w.code} · {w.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Changing the route changes the customer's default route for new
+            inbound/orders. Existing orders keep their recorded route.
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60"
+          >
+            {busy ? "Updating…" : "Update Route"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function CustomerDetailPage() {
   const { code } = useParams();
   const navigate = useNavigate();
   const { rows: whRows } = useWarehouses();
   const { user } = useAuth();
   const canTopUp = hasPermission(user, "payment.manage");
+  const canCreateAddresses = hasPermission(user, "customer_address.create");
+  const canEditAddresses = hasPermission(user, "customer_address.edit");
+  const canDeleteAddresses = hasPermission(user, "customer_address.delete");
+  const canManageAddresses =
+    canCreateAddresses || canEditAddresses || canDeleteAddresses;
+  const canEditRoute =
+    hasPermission(user, "customer.edit") ||
+    hasPermission(user, "warehouse.manage");
   const [tab, setTab] = useState("packages");
   const [topUp, setTopUp] = useState(false);
+  const [addressModal, setAddressModal] = useState(false);
+  const [editAddress, setEditAddress] = useState(null);
+  const [routeModal, setRouteModal] = useState(false);
   const [reload, setReload] = useState(0);
   const [state, setState] = useState({
     loading: true,
@@ -29323,21 +30435,69 @@ function CustomerDetailPage() {
   ];
   const addrCols = [
     {
-      key: "address",
-      label: "Address",
-      search: (r) => cdAddr(r),
-      render: (r) => cdAddr(r) || "—",
+      key: "label",
+      label: "Location",
+      search: (r) => `${r.label || ""} ${cdAddr(r)}`,
+      render: (r) => (
+        <div className="min-w-[220px]">
+          <div className="font-bold text-slate-800">
+            {r.label || "Location"}
+          </div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            {cdAddr(r) || "—"}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "branch",
+      label: "Branch",
+      search: (r) => whLabel(r.kh_branch_code),
+      render: (r) => whLabel(r.kh_branch_code),
     },
     {
       key: "default",
-      label: "",
+      label: "Status",
       search: () => "",
       render: (r) =>
         r.is_default ? (
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
             Primary
           </span>
+        ) : r.source === "SYSTEM" ? (
+          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">
+            System
+          </span>
         ) : null,
+    },
+    {
+      key: "actions",
+      label: "",
+      search: () => "",
+      render: (r) => (
+        <div className="flex items-center justify-end gap-1">
+          {canEditAddresses && (
+            <button
+              type="button"
+              onClick={() => setEditAddress(r)}
+              className="h-8 w-8 grid place-items-center rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-700"
+              title="Edit location"
+            >
+              <Icons.Pencil size={14} />
+            </button>
+          )}
+          {canDeleteAddresses && (
+            <button
+              type="button"
+              onClick={() => deleteAddress(r)}
+              className="h-8 w-8 grid place-items-center rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600"
+              title="Delete location"
+            >
+              <Icons.Trash2 size={14} />
+            </button>
+          )}
+        </div>
+      ),
     },
   ];
 
@@ -29346,6 +30506,49 @@ function CustomerDetailPage() {
     ["transactions", "Transactions", tx.length],
     ["addresses", "Addresses", addrs.length],
   ];
+
+  async function deleteAddress(address) {
+    if (!address?.id || !canDeleteAddresses) return;
+    const label = address.label || "this location";
+    if (!window.confirm(`Delete ${label}?`)) return;
+    try {
+      const wasDefault = !!address.is_default;
+      const { error } = await supabase
+        .from("customer_addresses")
+        .delete()
+        .eq("id", address.id)
+        .eq("customer_id", cust.id);
+      if (error) throw error;
+      if (wasDefault) {
+        const next = (addrs || []).find((a) => a.id !== address.id);
+        if (next) {
+          const { error: promoteErr } = await supabase
+            .from("customer_addresses")
+            .update({ is_default: true })
+            .eq("id", next.id)
+            .eq("customer_id", cust.id);
+          if (promoteErr) throw promoteErr;
+          await supabase
+            .from("customers")
+            .update({ default_kh_branch: next.kh_branch_code || null })
+            .eq("id", cust.id);
+        } else {
+          await supabase
+            .from("customers")
+            .update({ default_kh_branch: null })
+            .eq("id", cust.id);
+        }
+      }
+      emitCBToast("ok", "Location deleted", `${label} was deleted.`);
+      setReload((n) => n + 1);
+    } catch (err) {
+      emitCBToast(
+        "error",
+        "Delete failed",
+        err?.message || "Unable to delete location.",
+      );
+    }
+  }
 
   return (
     <div className="min-h-full bg-slate-50/70">
@@ -29364,6 +30567,47 @@ function CustomerDetailPage() {
             onDone={() => {
               setTopUp(false);
               setReload((n) => n + 1);
+            }}
+          />
+        )}
+        {addressModal && canCreateAddresses && (
+          <CustomerAddressCreateModal
+            customer={cust}
+            warehouses={whRows}
+            onClose={() => setAddressModal(false)}
+            onDone={() => {
+              setAddressModal(false);
+              setReload((n) => n + 1);
+              setTab("addresses");
+            }}
+          />
+        )}
+        {editAddress && canEditAddresses && (
+          <CustomerAddressEditModal
+            customer={cust}
+            warehouses={whRows}
+            address={editAddress}
+            onClose={() => setEditAddress(null)}
+            onDone={() => {
+              setEditAddress(null);
+              setReload((n) => n + 1);
+            }}
+          />
+        )}
+        {routeModal && canEditRoute && (
+          <CustomerWarehouseRouteModal
+            customer={cust}
+            warehouses={whRows}
+            onClose={() => setRouteModal(false)}
+            onDone={(patch) => {
+              setRouteModal(false);
+              setState((s) => ({ ...s, cust: { ...s.cust, ...patch } }));
+              setReload((n) => n + 1);
+              emitCBToast(
+                "ok",
+                "Warehouse Route updated",
+                "Customer default route was updated.",
+              );
             }}
           />
         )}
@@ -29477,30 +30721,114 @@ function CustomerDetailPage() {
               <CdRow label="Email" value={cust.email} />
             </CdCard>
             <CdCard title="Warehouse Route" icon="Warehouse">
-              <CdRow
-                label="China Warehouse"
-                value={whLabel(cust.default_china_wh || cust.warehouse)}
-              />
-              <CdRow
-                label="Cambodia Branch"
-                value={whLabel(cust.default_kh_branch)}
-              />
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <CdRow
+                    label="China Warehouse"
+                    value={whLabel(cust.default_china_wh || cust.warehouse)}
+                  />
+                  <CdRow
+                    label="Cambodia Branch"
+                    value={whLabel(cust.default_kh_branch)}
+                  />
+                </div>
+                {canEditRoute && (
+                  <button
+                    type="button"
+                    onClick={() => setRouteModal(true)}
+                    className="mt-0.5 h-8 w-8 shrink-0 grid place-items-center rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-700"
+                    title="Edit warehouse route"
+                  >
+                    <Icons.Pencil size={15} />
+                  </button>
+                )}
+              </div>
             </CdCard>
-            <CdCard title="Primary Address" icon="MapPin">
+            <CdCard title="Address" icon="MapPin">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="text-xs font-semibold text-slate-500">
+                  {addrs.length
+                    ? `${addrs.length} saved location${addrs.length > 1 ? "s" : ""}`
+                    : "No saved location"}
+                </div>
+                {canCreateAddresses && (
+                  <button
+                    type="button"
+                    onClick={() => setAddressModal(true)}
+                    className="inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:text-blue-700"
+                  >
+                    <Icons.Plus size={15} /> Create
+                  </button>
+                )}
+              </div>
               {defAddr ? (
-                <p className="text-sm leading-relaxed text-slate-700">
-                  {cdAddr(defAddr)}
-                </p>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Icons.Home
+                        size={15}
+                        className="text-blue-600 shrink-0"
+                      />
+                      <span className="text-sm font-bold text-slate-800 truncate">
+                        {defAddr.label || "Primary Location"}
+                      </span>
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 shrink-0">
+                        Primary
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {canEditAddresses && (
+                        <button
+                          type="button"
+                          onClick={() => setEditAddress(defAddr)}
+                          className="h-7 w-7 grid place-items-center rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-700"
+                          title="Edit location"
+                        >
+                          <Icons.Pencil size={13} />
+                        </button>
+                      )}
+                      {canDeleteAddresses && (
+                        <button
+                          type="button"
+                          onClick={() => deleteAddress(defAddr)}
+                          className="h-7 w-7 grid place-items-center rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          title="Delete location"
+                        >
+                          <Icons.Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                    {cdAddr(defAddr)}
+                  </p>
+                  {defAddr.kh_branch_code && (
+                    <p className="mt-1 text-xs font-semibold text-blue-700">
+                      {whLabel(defAddr.kh_branch_code)}
+                    </p>
+                  )}
+                </div>
               ) : (
-                <p className="text-sm text-slate-400">No address saved.</p>
+                <div className="rounded-xl border border-dashed border-slate-300 p-4 text-center">
+                  <p className="text-sm text-slate-400">No address saved.</p>
+                  {canCreateAddresses && (
+                    <button
+                      type="button"
+                      onClick={() => setAddressModal(true)}
+                      className="mt-2 text-sm font-bold text-blue-600"
+                    >
+                      Create first location
+                    </button>
+                  )}
+                </div>
               )}
-              {addrs.length > 1 && (
+              {addrs.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setTab("addresses")}
-                  className="mt-2 text-xs font-bold text-blue-600 hover:underline"
+                  className="mt-3 text-xs font-bold text-blue-600 hover:underline"
                 >
-                  View all {addrs.length} addresses
+                  View all {addrs.length} locations
                 </button>
               )}
             </CdCard>
