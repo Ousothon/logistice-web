@@ -9637,19 +9637,126 @@ function Topbar({ title, onMenuClick }) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
-  const [globalSearch, setGlobalSearch] = useState("");
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
   const menuRef = useRef(null);
+  const commandInputRef = useRef(null);
   const { items: slaBellItems } = useSlaNotifications({ limit: 500 });
   const slaUnread = slaBellItems.filter((n) => !n.read_at).length;
 
-  // Global "TK, Order, Container" search — sends the query to Shipment
-  // Lookup, which does the actual matching (TK, Customer ID, Order ID,
-  // Shipment ID) and renders the results as an Order List.
-  function handleGlobalSearch(e) {
-    e.preventDefault();
-    const q = globalSearch.trim();
-    if (!q) return;
-    navigate(`/shipment-lookup?q=${encodeURIComponent(q)}`);
+  // Command Palette / Quick Navigation.
+  // Only routes already allowed for the current staff account are exposed.
+  const commandItems = useMemo(() => {
+    const sections = [];
+    for (const section of NAV_SECTIONS) {
+      const items = section.items.filter(
+        (item) =>
+          user?.allowedPaths === "*" || user?.allowedPaths?.includes(item.path),
+      );
+      if (items.length) {
+        sections.push({
+          label: section.label || "MAIN",
+          items,
+        });
+      }
+    }
+    return sections;
+  }, [user?.allowedPaths]);
+
+  const flatCommandItems = useMemo(
+    () => commandItems.flatMap((section) => section.items),
+    [commandItems],
+  );
+
+  const filteredCommandItems = useMemo(() => {
+    const q = commandQuery.trim().toLowerCase();
+    if (!q) return flatCommandItems;
+
+    return flatCommandItems.filter((item) => {
+      const haystack =
+        `${item.label} ${item.path} ${item.section || ""}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [flatCommandItems, commandQuery]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [commandQuery, commandOpen]);
+
+  useEffect(() => {
+    if (!commandOpen) return;
+    const id = requestAnimationFrame(() => commandInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [commandOpen]);
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      const isShortcut =
+        (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+
+      if (isShortcut) {
+        e.preventDefault();
+        setMenuOpen(false);
+        setCommandOpen(true);
+        return;
+      }
+
+      if (!commandOpen) return;
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setCommandOpen(false);
+        setCommandQuery("");
+        return;
+      }
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIndex((i) =>
+          filteredCommandItems.length
+            ? (i + 1) % filteredCommandItems.length
+            : 0,
+        );
+      }
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIndex((i) =>
+          filteredCommandItems.length
+            ? (i - 1 + filteredCommandItems.length) %
+              filteredCommandItems.length
+            : 0,
+        );
+      }
+
+      if (e.key === "Enter" && filteredCommandItems[activeIndex]) {
+        e.preventDefault();
+        navigate(filteredCommandItems[activeIndex].path);
+        setCommandOpen(false);
+        setCommandQuery("");
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [commandOpen, filteredCommandItems, activeIndex, navigate]);
+
+  function openCommandPalette() {
+    setMenuOpen(false);
+    setCommandQuery("");
+    setActiveIndex(0);
+    setCommandOpen(true);
+  }
+
+  function closeCommandPalette() {
+    setCommandOpen(false);
+    setCommandQuery("");
+  }
+
+  function goToCommandItem(item) {
+    navigate(item.path);
+    closeCommandPalette();
   }
 
   useEffect(() => {
@@ -9671,137 +9778,289 @@ function Topbar({ title, onMenuClick }) {
   }
 
   return (
-    <header className="cb-topbar h-16 shrink-0 flex items-center gap-4 px-4 lg:px-6">
-      <button
-        onClick={onMenuClick}
-        className="lg:hidden p-2 -ml-2 rounded-sm hover:bg-mist-100 text-ink-800"
-        aria-label="Open menu"
-      >
-        <Menu size={20} />
-      </button>
-
-      <h1 className="cb-page-title font-display font-bold text-lg text-ink-900 hidden sm:block">
-        {title}
-      </h1>
-
-      <div className="flex-1" />
-
-      <form
-        onSubmit={handleGlobalSearch}
-        className="hidden md:flex items-center gap-2 bg-mist-100 rounded-md px-3 py-2 w-64"
-      >
+    <>
+      <header className="cb-topbar h-16 shrink-0 flex items-center gap-3 px-4 lg:px-6">
         <button
-          type="submit"
-          className="shrink-0 text-ink-600/50 hover:text-ink-900"
-          aria-label="Search"
+          onClick={onMenuClick}
+          className="lg:hidden p-2 -ml-2 rounded-sm hover:bg-mist-100 text-ink-800"
+          aria-label="Open menu"
         >
-          <Search size={16} />
+          <Menu size={20} />
         </button>
-        <input
-          value={globalSearch}
-          onChange={(e) => setGlobalSearch(e.target.value)}
-          className="bg-transparent outline-none text-sm text-ink-900 placeholder:text-ink-600/40 w-full"
-        />
-      </form>
 
-      <button
-        onClick={() => navigate("/notifications")}
-        className="relative p-2 rounded-sm hover:bg-mist-100 text-ink-700"
-      >
-        <Bell size={19} />
-        {slaUnread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-signal-red text-white text-[10px] font-bold grid place-items-center">
-            {slaUnread > 99 ? "99+" : slaUnread}
+        <h1 className="cb-page-title font-display font-bold text-lg text-ink-900 hidden sm:block">
+          {title}
+        </h1>
+
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          className="hidden md:flex flex-1 max-w-2xl mx-auto items-center gap-3 h-10 px-3.5
+                     rounded-lg border border-mist-200 bg-mist-50/70
+                     text-left hover:bg-white hover:border-mist-300
+                     transition-all shadow-sm"
+          aria-label="Search pages or jump to a menu"
+        >
+          <Search size={18} className="text-ink-600/45 shrink-0" />
+          <span className="text-sm text-ink-600/55 flex-1">
+            Search pages or jump to a menu...
           </span>
-        )}
-      </button>
-
-      <div className="relative" ref={menuRef}>
-        <button
-          onClick={() => setMenuOpen((v) => !v)}
-          className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-md hover:bg-mist-100"
-        >
-          <div className="w-8 h-8 rounded-full bg-ink-800 text-white text-xs font-semibold flex items-center justify-center">
-            {initials}
-          </div>
-          <div className="hidden sm:block text-left leading-tight">
-            <div className="text-sm font-medium text-ink-900 capitalize">
-              {displayName}
-            </div>
-            <div className="text-[11px] text-ink-600/50">Admin</div>
-          </div>
-          <ChevronDown size={15} className="text-ink-600/50 hidden sm:block" />
+          <kbd
+            className="hidden lg:inline-flex items-center rounded-md border border-mist-200
+                          bg-white px-2 py-0.5 text-[11px] font-medium text-ink-600/55"
+          >
+            Ctrl K
+          </kbd>
         </button>
 
-        {menuOpen && (
-          <div className="absolute right-0 mt-2 w-48 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
-            <div className="px-3.5 py-2 border-b border-mist-100">
-              <div className="text-sm font-medium text-ink-900 truncate">
+        <div className="flex-1 md:hidden" />
+
+        <button
+          onClick={() => navigate("/notifications")}
+          className="relative p-2 rounded-sm hover:bg-mist-100 text-ink-700"
+          aria-label="Notifications"
+        >
+          <Bell size={19} />
+          {slaUnread > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-signal-red text-white text-[10px] font-bold grid place-items-center">
+              {slaUnread > 99 ? "99+" : slaUnread}
+            </span>
+          )}
+        </button>
+
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-md hover:bg-mist-100"
+          >
+            <div className="w-8 h-8 rounded-full bg-ink-800 text-white text-xs font-semibold flex items-center justify-center">
+              {initials}
+            </div>
+            <div className="hidden sm:block text-left leading-tight">
+              <div className="text-sm font-medium text-ink-900 capitalize">
                 {displayName}
               </div>
-              <div className="text-xs text-ink-600/50 truncate">
-                {user?.email}
-              </div>
+              <div className="text-[11px] text-ink-600/50">Admin</div>
             </div>
-            <button
-              onClick={() => {
-                setMenuOpen(false);
-                setShowAccount(true);
-              }}
-              className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
-            >
-              <UserRound size={15} />
-              My Account
-            </button>
-            <button
-              onClick={handleLogout}
-              className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left"
-            >
-              <LogOut size={15} />
-              Log out
-            </button>
-          </div>
-        )}
-      </div>
+            <ChevronDown
+              size={15}
+              className="text-ink-600/50 hidden sm:block"
+            />
+          </button>
 
-      {showAccount && (
-        <div
-          className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-          onClick={() => setShowAccount(false)}
-        >
-          <div
-            className="bg-white rounded-md shadow-lg w-full max-w-sm p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="font-display font-bold text-base text-ink-900 mb-4">
-              My Account
-            </h3>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-11 h-11 rounded-full bg-ink-800 text-white text-sm font-semibold flex items-center justify-center shrink-0">
-                {initials}
-              </div>
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-ink-900 capitalize truncate">
+          {menuOpen && (
+            <div className="absolute right-0 mt-2 w-48 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
+              <div className="px-3.5 py-2 border-b border-mist-100">
+                <div className="text-sm font-medium text-ink-900 truncate">
                   {displayName}
                 </div>
-                <div className="text-xs text-ink-600/55 truncate">
+                <div className="text-xs text-ink-600/50 truncate">
                   {user?.email}
                 </div>
               </div>
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  setShowAccount(true);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+              >
+                <UserRound size={15} />
+                My Account
+              </button>
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left"
+              >
+                <LogOut size={15} />
+                Log out
+              </button>
             </div>
-            <button
-              onClick={() => setShowAccount(false)}
-              className="w-full text-sm font-medium text-center border border-mist-200 py-2 rounded-md hover:bg-mist-50"
+          )}
+        </div>
+
+        {showAccount && (
+          <div
+            className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
+            onClick={() => setShowAccount(false)}
+          >
+            <div
+              className="bg-white rounded-md shadow-lg w-full max-w-sm p-5"
+              onClick={(e) => e.stopPropagation()}
             >
-              Close
-            </button>
+              <h3 className="font-display font-bold text-base text-ink-900 mb-4">
+                My Account
+              </h3>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-11 h-11 rounded-full bg-ink-800 text-white text-sm font-semibold flex items-center justify-center shrink-0">
+                  {initials}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink-900 capitalize truncate">
+                    {displayName}
+                  </div>
+                  <div className="text-xs text-ink-600/55 truncate">
+                    {user?.email}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAccount(false)}
+                className="w-full text-sm font-medium text-center border border-mist-200 py-2 rounded-md hover:bg-mist-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+      </header>
+
+      {commandOpen && (
+        <div
+          className="fixed inset-0 z-[100] bg-ink-900/35 backdrop-blur-[1px] flex items-start justify-center px-4 pt-[10vh] sm:pt-[12vh]"
+          onMouseDown={closeCommandPalette}
+        >
+          <div
+            className="w-full max-w-3xl overflow-hidden rounded-2xl border border-mist-200 bg-white shadow-2xl"
+            onMouseDown={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search pages"
+          >
+            <div className="flex items-center gap-3 px-5 h-16 border-b border-mist-100">
+              <Search size={21} className="text-ink-600/45 shrink-0" />
+              <input
+                ref={commandInputRef}
+                value={commandQuery}
+                onChange={(e) => setCommandQuery(e.target.value)}
+                placeholder="Search pages or menu..."
+                className="flex-1 bg-transparent outline-none text-base text-ink-900 placeholder:text-ink-600/40"
+                autoComplete="off"
+                aria-label="Search pages"
+              />
+              <kbd className="rounded-md border border-mist-200 bg-mist-50 px-2 py-1 text-[11px] text-ink-600/55">
+                Esc
+              </kbd>
+            </div>
+
+            <div className="max-h-[68vh] overflow-y-auto py-3">
+              {commandQuery.trim() ? (
+                filteredCommandItems.length ? (
+                  <div className="px-3">
+                    <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-600/45">
+                      Search Results
+                    </div>
+                    {filteredCommandItems.map((item, index) => (
+                      <button
+                        key={`${item.path}-${index}`}
+                        type="button"
+                        onClick={() => goToCommandItem(item)}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                          index === activeIndex
+                            ? "bg-blue-50 text-signal-blue"
+                            : "text-ink-800 hover:bg-mist-50"
+                        }`}
+                      >
+                        <span className="w-8 h-8 rounded-lg bg-mist-50 grid place-items-center shrink-0">
+                          <Icon name={item.icon} size={17} strokeWidth={1.9} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium truncate">
+                            {item.label}
+                          </span>
+                          <span className="block text-[11px] text-ink-600/40 truncate">
+                            {item.path}
+                          </span>
+                        </span>
+                        {index === activeIndex && (
+                          <span className="text-[11px] text-ink-600/40">
+                            Enter
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-6 py-14 text-center">
+                    <Search
+                      size={28}
+                      className="mx-auto text-ink-600/20 mb-3"
+                    />
+                    <div className="text-sm font-medium text-ink-800">
+                      No pages found
+                    </div>
+                    <div className="text-xs text-ink-600/45 mt-1">
+                      Try another page name or route.
+                    </div>
+                  </div>
+                )
+              ) : (
+                <div className="px-3">
+                  {commandItems.map((section, sectionIndex) => (
+                    <div
+                      key={`${section.label}-${sectionIndex}`}
+                      className="mb-4 last:mb-0"
+                    >
+                      <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-600/45">
+                        {section.label}
+                      </div>
+
+                      {section.items.map((item) => {
+                        const index = filteredCommandItems.findIndex(
+                          (x) => x.path === item.path,
+                        );
+                        const active = index === activeIndex;
+
+                        return (
+                          <button
+                            key={item.path}
+                            type="button"
+                            onClick={() => goToCommandItem(item)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                              active
+                                ? "bg-blue-50 text-signal-blue"
+                                : "text-ink-800 hover:bg-mist-50"
+                            }`}
+                          >
+                            <span className="w-8 h-8 rounded-lg bg-mist-50 grid place-items-center shrink-0">
+                              <Icon
+                                name={item.icon}
+                                size={17}
+                                strokeWidth={1.9}
+                              />
+                            </span>
+                            <span className="min-w-0 flex-1 text-sm font-medium truncate">
+                              {item.label}
+                            </span>
+                            <span className="text-[11px] text-ink-600/35 truncate max-w-[220px]">
+                              {item.path}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="h-11 px-5 border-t border-mist-100 bg-mist-50/50 flex items-center gap-4 text-[11px] text-ink-600/45">
+              <span>
+                <b className="text-ink-600/60">↑ ↓</b> Navigate
+              </span>
+              <span>
+                <b className="text-ink-600/60">Enter</b> Open
+              </span>
+              <span>
+                <b className="text-ink-600/60">Esc</b> Close
+              </span>
+            </div>
           </div>
         </div>
       )}
-    </header>
+    </>
   );
 }
-
 // ------------------------------------------------------------
 // components/Layout.jsx
 // ------------------------------------------------------------
@@ -13041,10 +13300,30 @@ function lastActivityAt(pkg) {
 }
 
 function packageCustomerLabel(pkg) {
-  const id = pkg.customer_id || pkg.customerId;
-  return id
-    ? `${id} · ${pkg.customer || "—"}`
-    : pkg.customer || "Unknown Customer";
+  // Never expose the database UUID in dashboard activity/exception lists.
+  // Prefer the human-readable customer code, then the customer label.
+  const raw = String(pkg.customer || "").trim();
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const parts = raw
+    .split(" · ")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const withoutUuid = parts.filter((part) => !UUID_RE.test(part));
+
+  if (withoutUuid.length) {
+    // If the package already stores `KH-000024 · Hip hop`, keep it as-is.
+    return withoutUuid.join(" · ");
+  }
+
+  const code =
+    pkg.customer_code || pkg.customerCode || pkg.customer_code_display;
+  if (code) {
+    const name = pkg.customer_name || pkg.customerName || "";
+    return name ? `${code} · ${name}` : String(code);
+  }
+
+  return pkg.customer || "Unknown Customer";
 }
 
 function statusTone(pkg) {
@@ -13273,226 +13552,427 @@ function customerIdOf(pkg) {
 }
 
 function ShipmentLookup() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { packages } = usePackageTracking();
   const [searchValue, setSearchValue] = useState(searchParams.get("q") || "");
-  // Real orders matched from the shared package registry — this is what
-  // renders as the "Order List" (Customer ID / TK search).
-  const [orderResults, setOrderResults] = useState(null);
-  // Legacy curated Shipment lookup (Shipment ID / Customer Name) — kept as
-  // a fallback for the sample data this page originally shipped with.
-  const [shipmentResult, setShipmentResult] = useState(null);
+  const [rows, setRows] = useState([]);
   const [searched, setSearched] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  function runSearch(rawValue) {
+  const normalize = React.useCallback(
+    (pkg, containerMap, warehouseMap, orderMap) => {
+      const containerNo = pkg.container_no || pkg.container_number || "";
+      const container =
+        containerMap[String(containerNo).trim().toLowerCase()] || null;
+      const orderKey = String(pkg.order_no || pkg.order_id || "")
+        .trim()
+        .toLowerCase();
+      const order = orderMap[orderKey] || null;
+      const branchCode = pkg.dest_branch_code || order?.kh_branch_code || "";
+      const warehouse =
+        warehouseMap[String(branchCode).trim().toLowerCase()] || null;
+      return {
+        ...pkg,
+        order_display: pkg.order_no || order?.order_no || pkg.order_id || "—",
+        tk_display: pkg.tk || "—",
+        product_display: pkg.product_name || pkg.cargo_type || "—",
+        warehouse_display: warehouse
+          ? `${warehouse.code}${warehouse.name ? ` · ${warehouse.name}` : ""}`
+          : branchCode || "—",
+        shipping_method_display:
+          container?.shipping_method ||
+          pkg.shipping_method ||
+          order?.shipping_method ||
+          "—",
+        status_display: pkg.status || "—",
+        customer_display: pkg.customer || order?.customer || "—",
+        // Human-readable customer code only. Never render the database UUID.
+        customer_code_display:
+          pkg.customer_code ||
+          order?.customer_code ||
+          String(pkg.customer || order?.customer || "")
+            .split(" · ")[0]
+            .trim() ||
+          "—",
+        weight_display:
+          pkg.weight_kg !== null &&
+          pkg.weight_kg !== undefined &&
+          pkg.weight_kg !== ""
+            ? `${pkg.weight_kg} KG`
+            : pkg.weight || "—",
+        fee_display: shippingFeeText(pkg),
+      };
+    },
+    [],
+  );
+
+  async function runSearch(rawValue) {
     const query = String(rawValue || "").trim();
     if (!query) return;
-    const upper = query.toUpperCase();
 
-    // 1) TK — an exact match pulls in every other order for that same
-    // customer too, so a TK search still reads as an Order List rather
-    // than a single isolated row.
-    const byTk = packages.filter(
-      (p) => String(p.tk).trim().toUpperCase() === upper,
-    );
-    let matches = byTk;
-    if (!byTk.length) {
-      // 2) Customer ID (exact) or Order ID, or a loose match on the
-      // customer string (covers pasting the full "KH-000582 · Name").
-      matches = packages.filter((p) => {
-        const custId = customerIdOf(p).toUpperCase();
-        const orderId = String(p.order_id || "").toUpperCase();
-        return (
-          custId === upper ||
-          orderId === upper ||
-          String(p.customer || "")
-            .toUpperCase()
-            .includes(upper)
-        );
-      });
-    } else {
-      const customerKey = byTk[0].customer;
-      matches = customerKey
-        ? packages.filter((p) => p.customer === customerKey)
-        : byTk;
-    }
-
-    if (matches.length) {
-      setOrderResults(matches);
-      setShipmentResult(null);
-      setSearched(true);
-      return;
-    }
-
-    // 3) Fall back to the curated sample Shipment dataset (Shipment ID or
-    // Customer Name), for shipments that aren't in the live registry.
-    let foundShipment =
-      Object.values(SHIPMENT_LOOKUP_DATA).find((s) => s.customerId === upper) ||
-      Object.values(SHIPMENT_LOOKUP_DATA).find((s) =>
-        s.customerName.toUpperCase().includes(upper),
-      ) ||
-      Object.values(SHIPMENT_LOOKUP_DATA).find((s) =>
-        s.tks.some((t) => t.tk === upper),
-      ) ||
-      SHIPMENT_LOOKUP_DATA[upper] ||
-      null;
-
-    setOrderResults([]);
-    setShipmentResult(foundShipment);
+    setLoading(true);
     setSearched(true);
+    setError("");
+    setRows([]);
+
+    try {
+      // Search the live package/order/warehouse/container sources in parallel.
+      // This keeps the result fresh and lets the UI show one animated loading
+      // state while all sources are being resolved.
+      if (supabase) {
+        const q = query.replace(/[%_]/g, "\\$&");
+        const [pkgRes, orderRes, containerRes, customerRes] = await Promise.all(
+          [
+            supabase
+              .from("packages")
+              .select("*")
+              .or(
+                `tk.ilike.%${q}%,order_no.ilike.%${q}%,customer.ilike.%${q}%,product_name.ilike.%${q}%,dest_branch_code.ilike.%${q}%`,
+              )
+              .order("created_at", { ascending: false })
+              .limit(500),
+            supabase
+              .from("orders")
+              .select("*")
+              .or(`order_no.ilike.%${q}%,customer.ilike.%${q}%`)
+              .order("created_at", { ascending: false })
+              .limit(100),
+            supabase
+              .from("containers")
+              .select("container_number, container_type, shipping_method")
+              .limit(1000),
+            supabase
+              .from("customers")
+              .select("id, customer_code, name, phone")
+              .or(
+                `customer_code.ilike.%${q}%,name.ilike.%${q}%,phone.ilike.%${q}%`,
+              )
+              .limit(100),
+          ],
+        );
+
+        if (pkgRes.error) throw pkgRes.error;
+
+        const orderMap = {};
+        for (const order of orderRes.data || []) {
+          const keys = [order.order_no, order.id].filter(Boolean);
+          keys.forEach((key) => {
+            orderMap[String(key).trim().toLowerCase()] = order;
+          });
+        }
+
+        // If the search matched an order/customer but not the package query,
+        // fetch the packages belonging to those matched orders as well.
+        let matchedPackages = pkgRes.data || [];
+
+        // Customer ID search: customer_code is text, while customers.id is UUID.
+        // Never use ILIKE against UUID columns; use the text customer_code to
+        // discover matching customers, then fetch packages by exact UUID.
+        const customerIds = (customerRes.data || [])
+          .map((c) => c.id)
+          .filter(Boolean);
+        if (customerIds.length) {
+          const { data: customerPackages, error: customerPkgError } =
+            await supabase
+              .from("packages")
+              .select("*")
+              .in("customer_id", customerIds.slice(0, 100))
+              .limit(500);
+          if (!customerPkgError && customerPackages?.length) {
+            const byTk = new Map(matchedPackages.map((p) => [String(p.tk), p]));
+            customerPackages.forEach((p) => byTk.set(String(p.tk), p));
+            matchedPackages = [...byTk.values()];
+          }
+        }
+
+        const orderIds = (orderRes.data || [])
+          .flatMap((o) => [o.order_no, o.id])
+          .filter(Boolean);
+        if (orderIds.length) {
+          const safeOrderIds = [...new Set(orderIds)].slice(0, 100);
+          const { data: orderPackages, error: orderPkgError } = await supabase
+            .from("packages")
+            .select("*")
+            .or(
+              safeOrderIds
+                .map((id) => `order_no.eq.${String(id).replace(/[,()]/g, "")}`)
+                .join(","),
+            )
+            .limit(500);
+          if (!orderPkgError && orderPackages?.length) {
+            const byTk = new Map(matchedPackages.map((p) => [String(p.tk), p]));
+            orderPackages.forEach((p) => byTk.set(String(p.tk), p));
+            matchedPackages = [...byTk.values()];
+          }
+        }
+
+        const containerMap = {};
+        for (const c of containerRes.data || []) {
+          if (c.container_number) {
+            containerMap[String(c.container_number).trim().toLowerCase()] = c;
+          }
+        }
+
+        const branchCodes = [
+          ...new Set(
+            matchedPackages
+              .map(
+                (p) =>
+                  p.dest_branch_code ||
+                  orderMap[String(p.order_no || p.order_id || "").toLowerCase()]
+                    ?.kh_branch_code,
+              )
+              .filter(Boolean),
+          ),
+        ];
+        const warehouseMap = {};
+        if (branchCodes.length) {
+          const { data: whs } = await supabase
+            .from("warehouses")
+            .select("code, name, province, district")
+            .in("code", branchCodes.slice(0, 100));
+          for (const wh of whs || []) {
+            warehouseMap[String(wh.code).trim().toLowerCase()] = wh;
+          }
+        }
+
+        setRows(
+          matchedPackages.map((pkg) =>
+            normalize(pkg, containerMap, warehouseMap, orderMap),
+          ),
+        );
+      } else {
+        // UI-only fallback: keep the existing local package registry working.
+        const upper = query.toUpperCase();
+        const matches = packages.filter((p) => {
+          const haystack = [
+            p.tk,
+            p.order_no,
+            p.order_id,
+            p.customer,
+            p.customer_id,
+            p.product_name,
+            p.dest_branch_code,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toUpperCase();
+          return haystack.includes(upper);
+        });
+        setRows(matches.map((pkg) => normalize(pkg, {}, {}, {})));
+      }
+    } catch (err) {
+      console.error("[shipment-lookup] search failed", err);
+      setRows([]);
+      setError(err?.message || "Unable to search shipment data.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  // A search launched from the header ("Search TK, Order, Container...")
-  // lands here as ?q=..., so run it once on arrival.
   useEffect(() => {
     const q = searchParams.get("q");
-    if (q) runSearch(q);
+    if (q) {
+      setSearchValue(q);
+      runSearch(q);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const handleSearch = () => runSearch(searchValue);
-  const noResults =
-    searched && !shipmentResult && (!orderResults || orderResults.length === 0);
+  const noResults = searched && !loading && !error && rows.length === 0;
+
+  const SkeletonRow = () => (
+    <div className="animate-pulse grid grid-cols-[1.05fr_1.15fr_1.25fr_1.6fr_1.35fr_1.1fr_1fr] gap-4 items-center px-5 py-4 border-t border-mist-100">
+      {Array.from({ length: 7 }).map((_, i) => (
+        <div
+          key={i}
+          className={`h-4 rounded bg-mist-100 ${i === 2 ? "w-32" : "w-20"}`}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-5">
-      <h1 className="font-display font-bold text-2xl text-ink-900">
-        Shipment Lookup
-      </h1>
+      <div>
+        <h1 className="font-display font-bold text-2xl text-ink-900">
+          Shipment Lookup
+        </h1>
+        <p className="text-sm text-ink-600/55 mt-1">
+          Search Customer ID, TK, Order ID, customer name, or Shipment ID and
+          view the related orders and packages.
+        </p>
+      </div>
 
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-        <div className="space-y-4">
-          <label className="block text-sm font-medium text-ink-700 mb-2">
-            Search by Customer ID, TK, Order ID, Name, or Shipment ID
-          </label>
-          <div className="flex gap-3 flex-wrap">
+      <div className="bg-white border border-mist-200 rounded-xl shadow-panel p-5">
+        <div className="flex gap-3 items-center flex-wrap">
+          <div className="relative flex-1 min-w-[280px]">
+            <Search
+              size={17}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-600/40"
+            />
             <input
               type="text"
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleSearch()}
-              className="flex-1 min-w-[250px] px-3 py-2 border border-mist-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-signal-blue/50"
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              placeholder="Search Order ID, TK, Customer..."
+              className="w-full pl-10 pr-4 py-3 border border-mist-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-signal-blue/30 focus:border-signal-blue"
             />
-            <button
-              onClick={handleSearch}
-              className="px-6 py-2 bg-signal-blue text-white rounded-md text-sm font-medium hover:bg-signal-blue/90 transition"
-            >
-              <Search size={16} className="inline mr-1.5" />
-              Search
-            </button>
           </div>
+          <button
+            onClick={handleSearch}
+            disabled={loading || !searchValue.trim()}
+            className="px-6 py-3 bg-signal-blue text-white rounded-lg text-sm font-semibold hover:bg-signal-blue/90 disabled:opacity-50 transition flex items-center gap-2"
+          >
+            <Search size={16} />
+            {loading ? "Searching..." : "Search"}
+          </button>
         </div>
       </div>
 
-      {noResults && (
-        <div className="bg-white border border-dashed border-mist-300 rounded-md p-8 text-center">
-          <p className="text-ink-600/60">គ្មានលទ្ធផលSearch</p>
+      {error && (
+        <div className="bg-signal-red/5 border border-signal-red/20 rounded-xl px-4 py-3 text-sm text-signal-red">
+          {error}
         </div>
       )}
 
-      {orderResults && orderResults.length > 0 && (
-        <>
-          <div className="bg-white border border-signal-blue/30 rounded-md shadow-panel p-5 inline-block">
-            <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/50">
-              Total Orders
-            </div>
-            <div className="text-3xl font-display font-bold text-signal-blue mt-1">
-              {orderResults.length}
-            </div>
+      {loading && (
+        <div className="cb-surface cb-card overflow-hidden">
+          <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
+            <div className="h-5 w-36 rounded bg-mist-100 animate-pulse" />
+            <div className="h-4 w-20 rounded bg-mist-100 animate-pulse" />
           </div>
-
-          <div className="cb-surface cb-card">
-            <div className="px-5 py-3.5 border-b border-mist-200">
-              <h2 className="font-display font-bold text-sm text-ink-900">
-                Order List ({orderResults.length})
-              </h2>
-            </div>
-            <DataTable
-              columns={[
-                {
-                  key: "tk",
-                  label: "TK Number",
-                  strong: true,
-                  linkTo: (row) => `/packages/${row.tk}`,
-                },
-                { key: "customer", label: "Customer" },
-                { key: "weight", label: "Weight" },
-                { key: "warehouse", label: "Warehouse" },
-                SHIPPING_FEE_COL,
-                { key: "status", label: "Status", status: true },
-              ]}
-              rows={orderResults}
-            />
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+          <div className="px-5 py-4 flex items-center gap-2 text-xs text-ink-600/50">
+            <span className="w-2 h-2 rounded-full bg-signal-blue animate-pulse" />
+            Loading live data from connected sources...
           </div>
-        </>
+        </div>
       )}
 
-      {shipmentResult && (
+      {noResults && (
+        <div className="bg-white border border-dashed border-mist-300 rounded-xl p-10 text-center">
+          <Search size={28} className="mx-auto text-ink-600/20 mb-3" />
+          <p className="font-medium text-ink-700">No results found</p>
+          <p className="text-sm text-ink-600/45 mt-1">
+            Try another Order ID, TK, Customer ID, or customer name.
+          </p>
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
         <>
-          <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
-            <div className="space-y-4">
-              <div>
-                <h2 className="font-display font-bold text-lg text-ink-900 mb-3">
-                  Shipment information
-                </h2>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <InfoGrid
-                    items={[
-                      {
-                        label: "Shipment ID",
-                        value: shipmentResult.id,
-                        strong: true,
-                      },
-                      {
-                        label: "Customer ID",
-                        value: shipmentResult.customerId,
-                        strong: true,
-                      },
-                      {
-                        label: "Customer Name",
-                        value: shipmentResult.customerName,
-                      },
-                      { label: "Route", value: shipmentResult.route },
-                    ]}
-                  />
-                  <InfoGrid
-                    items={[
-                      {
-                        label: "Vessel / Voyage",
-                        value: shipmentResult.vessel,
-                      },
-                      { label: "TK Count", value: shipmentResult.tks.length },
-                      {
-                        label: "Total Weight",
-                        value: `${shipmentResult.tks.reduce((sum, tk) => sum + parseFloat(tk.weight), 0).toFixed(1)} KG`,
-                      },
-                    ]}
-                  />
-                </div>
-              </div>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-xs uppercase tracking-wide font-semibold text-ink-600/45">
+                Search Results
+              </p>
+              <h2 className="font-display font-bold text-lg text-ink-900 mt-0.5">
+                Order & Package List
+              </h2>
+            </div>
+            <div className="px-3 py-1.5 rounded-full bg-signal-blue/8 text-signal-blue text-sm font-semibold">
+              {rows.length} results
             </div>
           </div>
 
-          <div className="cb-surface cb-card">
-            <div className="px-5 py-3.5 border-b border-mist-200">
-              <h2 className="font-display font-bold text-sm text-ink-900">
-                TK List in Shipment ({shipmentResult.tks.length})
-              </h2>
+          <div className="cb-surface cb-card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1250px] text-sm">
+                <thead>
+                  <tr className="bg-mist-50 border-b border-mist-200 text-left">
+                    {[
+                      "Order ID",
+                      "Tracking Number",
+                      "Product",
+                      "Customer",
+                      "Cambodia Receiving Warehouse",
+                      "Shipping Method",
+                      "Status",
+                    ].map((label) => (
+                      <th
+                        key={label}
+                        className="px-5 py-3 text-[11px] font-bold uppercase tracking-wide text-ink-600/50 whitespace-nowrap"
+                      >
+                        {label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, index) => (
+                    <tr
+                      key={`${row.tk}-${index}`}
+                      className="border-b border-mist-100 last:border-b-0 hover:bg-mist-50/60 transition"
+                    >
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <div className="font-semibold text-ink-900">
+                          {row.order_display}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <button
+                          onClick={() => navigate(`/packages/${row.tk}`)}
+                          className="font-semibold text-signal-blue hover:underline"
+                        >
+                          {row.tk_display}
+                        </button>
+                      </td>
+                      <td className="px-5 py-4 max-w-[220px]">
+                        <div
+                          className="font-medium text-ink-800 truncate"
+                          title={row.product_display}
+                        >
+                          {row.product_display}
+                        </div>
+                        <div className="text-xs text-ink-600/45 mt-0.5">
+                          {row.cargo_type || row.package_type || "Package"}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 max-w-[210px]">
+                        <div
+                          className="font-medium text-ink-800 truncate"
+                          title={row.customer_display}
+                        >
+                          {row.customer_display}
+                        </div>
+                        <div className="text-xs text-ink-600/45 mt-0.5">
+                          {row.customer_code_display || "—"}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 max-w-[270px]">
+                        <div
+                          className="font-medium text-ink-800 truncate"
+                          title={row.warehouse_display}
+                        >
+                          {row.warehouse_display}
+                        </div>
+                        <div className="text-xs text-ink-600/45 mt-0.5">
+                          Cambodia Branch
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 font-medium text-xs">
+                          {row.shipping_method_display}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-signal-blue/8 text-signal-blue font-semibold text-xs">
+                          {row.status_display}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <DataTable
-              columns={[
-                {
-                  key: "tk",
-                  label: "TK Number",
-                  strong: true,
-                  linkTo: (row) => `/packages/${row.tk}`,
-                },
-                { key: "status", label: "Status", status: true },
-                { key: "weight", label: "Weight" },
-                { key: "fee", label: "Shipping Fee" },
-              ]}
-              rows={shipmentResult.tks}
-            />
           </div>
         </>
       )}
@@ -15144,6 +15624,7 @@ function PackageDetail() {
   const data = sourceRecord ? { ...baseline, ...sourceRecord } : baseline;
   const timeline = getTimeline(tk);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState("overview");
   const [showTransfer, setShowTransfer] = useState(false);
   const [showTrackingHistory, setShowTrackingHistory] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
@@ -15627,234 +16108,279 @@ function PackageDetail() {
             })}
           </div>
 
-          {data.exception && (
-            <div className="flex items-start gap-2.5 bg-signal-red/10 text-signal-red text-sm rounded-md px-4 py-3">
-              <TriangleAlert size={16} className="shrink-0 mt-0.5" />
-              <div>
-                <div className="font-medium">{data.exception.type}</div>
-                <div className="text-signal-red/80 mt-0.5">
-                  {data.exception.detail}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Horizontal stepper */}
-          <div className={`${CARD} p-5`}>
-            <div className="overflow-x-auto">
-              <ol className="flex min-w-[560px]">
-                {timeline.map((step, i) => {
-                  const done = step.state === "done";
-                  const active = step.state === "active";
-                  return (
-                    <li
-                      key={step.label}
-                      className="flex-1 flex flex-col items-center text-center relative"
-                    >
-                      {i < timeline.length - 1 && (
-                        <span
-                          className={`absolute top-4 left-1/2 w-full h-0.5 ${
-                            done ? "bg-signal-teal" : "bg-mist-200"
-                          }`}
-                        />
-                      )}
-                      <span
-                        className={`relative z-10 w-8 h-8 rounded-full border-2 flex items-center justify-center ${
-                          done
-                            ? "bg-signal-teal border-signal-teal text-white"
-                            : active
-                              ? "bg-signal-blue border-signal-blue text-white ring-4 ring-signal-blue/15"
-                              : "bg-white border-mist-200 text-ink-600/30"
-                        }`}
-                      >
-                        {done ? (
-                          <Check size={15} strokeWidth={3} />
-                        ) : active ? (
-                          <Icons.MapPin size={14} />
-                        ) : (
-                          <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                        )}
-                      </span>
-                      <span
-                        className={`mt-2 text-xs px-1 ${
-                          active
-                            ? "font-semibold text-signal-blue"
-                            : done
-                              ? "font-medium text-ink-900"
-                              : "text-ink-600/45"
-                        }`}
-                      >
-                        {step.label}
-                      </span>
-                      <span className="text-[10px] text-ink-600/40 mt-0.5">
-                        {step.time || "Pending"}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-            <div className="mt-4 pt-3 border-t border-mist-100 flex items-center justify-between gap-3 flex-wrap">
-              <span className="text-xs text-ink-600/45">
-                Proceed By: {currentStep.proceedBy || "NA"}
-              </span>
-              <div className="flex items-center gap-3 flex-wrap">
-                {statusAction}
-              </div>
+          {/* Package Detail tabs — UI only; all existing data/functions stay intact. */}
+          <div className="sticky top-0 z-20 bg-mist-50/95 backdrop-blur-sm border-b border-mist-200 -mx-1 px-1 py-2">
+            <div className="bg-white border border-mist-200 rounded-lg p-1.5 shadow-panel flex items-center gap-1 overflow-x-auto">
+              {[
+                {
+                  id: "overview",
+                  label: "Overview",
+                  icon: Icons.LayoutDashboard,
+                },
+                { id: "details", label: "Package Details", icon: Package },
+                {
+                  id: "tracking",
+                  label: "Tracking & Activity",
+                  icon: Icons.History,
+                },
+              ].map(({ id, label, icon: I }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setDetailTab(id)}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md whitespace-nowrap transition ${
+                    detailTab === id
+                      ? "bg-signal-blue text-white shadow-sm"
+                      : "text-ink-600/65 hover:bg-mist-50 hover:text-ink-900"
+                  }`}
+                >
+                  <I size={15} />
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Package information + product images */}
-          <div className="grid md:grid-cols-5 gap-5">
-            <div className={`${CARD} p-5 md:col-span-3`}>
-              <h2 className="flex items-center gap-2 font-display font-bold text-sm text-signal-blue mb-3">
-                <Package size={16} />
-                Package Information
-              </h2>
-              <dl className="grid sm:grid-cols-2 gap-x-6">
-                <div>
-                  <KV k="Tracking Number" v={data.tk} />
-                  <KV k="Order Number" v={data.order_no || data.order} />
-                  <KV
-                    k="Customer"
-                    v={
-                      custId && custId !== "—"
-                        ? `${custName} (${custId})`
-                        : custName
-                    }
-                  />
-                  <KV k="Created At" v={createdAt} />
-                  <KV
-                    k="Current Status"
-                    v={
-                      <StatusBadge
-                        label={pkgDisplayStatus({
-                          ...data,
-                          status: currentStage,
-                        })}
-                      />
-                    }
-                  />
-                </div>
-                <div>
-                  <KV k="Product Name" v={data.product_name} />
-                  <KV k="Category" v={data.cargo_type} />
-                  <KV k="Weight" v={data.weight} />
-                  <KV k="Size" v={sizeLabel(data.size_class)} />
-                  <KV k="CBM" v={data.cbm} />
-                  <KV k="Dimensions" v={dimensionText} />
-                  <KV k="Supplier" v={data.supplier} />
-                  <KV k="Packages" v={packageCountValue} />
-                  <KV k="Container" v={containerNo || "Not Assigned"} />
-                  <KV k="Destination" v={destinationValue} />
-                </div>
-              </dl>
-            </div>
-            <div className="md:col-span-2">
-              <PhotoGallery tk={data.tk} />
-            </div>
-          </div>
-
-          {/* Tracking history (vertical list) */}
-          <div className={`${CARD} p-5`}>
-            <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-4">
-              <Icons.Clock size={16} className="text-ink-600/60" />
-              Tracking History
-            </h2>
-            <ol>
-              {historyRows.map((s, i) => {
-                const isActive = s.state === "active";
-                return (
-                  <li key={s.label} className="flex gap-3">
-                    <div className="flex flex-col items-center">
-                      <span
-                        className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                          isActive
-                            ? "bg-signal-blue/15 border-2 border-signal-blue"
-                            : "bg-signal-teal text-white"
-                        }`}
-                      >
-                        {isActive ? (
-                          <span className="w-1.5 h-1.5 rounded-full bg-signal-blue" />
-                        ) : (
-                          <Check size={11} strokeWidth={3} />
-                        )}
-                      </span>
-                      {i < historyRows.length - 1 && (
-                        <span className="w-px flex-1 bg-mist-200 min-h-[22px]" />
-                      )}
-                    </div>
-                    <div className="flex-1 flex items-start justify-between gap-3 pb-4 min-w-0">
-                      <div>
-                        <div className="text-sm font-medium text-ink-900">
-                          {s.label}
-                        </div>
-                        <div className="text-xs text-ink-600/45">
-                          Proceed By: {s.proceedBy || "NA"}
-                        </div>
-                      </div>
-                      <div className="text-xs text-ink-600/50 whitespace-nowrap">
-                        {s.time || "—"}
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
-
-          <SlaPackageCard pkg={data} tk={tk} />
-
-          <StatusHistoryCard pkg={data} timeline={timeline} />
-
-          <div className={`${CARD} p-5`}>
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <div>
-                <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
-                  <Icons.History size={16} className="text-ink-600/60" />
-                  Recent Activity
-                </h2>
-                <p className="text-xs text-ink-600/45 mt-0.5">
-                  Latest actions recorded for this package.
-                </p>
-              </div>
-              <span className="text-[11px] font-semibold px-2 py-1 rounded-full bg-mist-100 text-ink-600/55">
-                {activityRows.length} events
-              </span>
-            </div>
-            {activityRows.length ? (
-              <div className="divide-y divide-mist-100">
-                {activityRows.map((item, i) => (
-                  <div
-                    key={`${item.at || "event"}-${i}`}
-                    className="py-3 first:pt-0 last:pb-0 flex items-start gap-3"
-                  >
-                    <div className="w-7 h-7 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
-                      <Check size={13} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-semibold text-ink-900">
-                          {item.status || "Package Updated"}
-                        </span>
-                        <span className="text-xs text-ink-600/40">
-                          {item.user || "System"}
-                        </span>
-                      </div>
-                      <div className="text-xs text-ink-600/45 mt-0.5">
-                        {item.at ? formatIso(item.at) : "—"}
-                        {item.remark ? ` · ${item.remark}` : ""}
-                      </div>
+          {detailTab === "overview" && (
+            <>
+              {data.exception && (
+                <div className="flex items-start gap-2.5 bg-signal-red/10 text-signal-red text-sm rounded-md px-4 py-3">
+                  <TriangleAlert size={16} className="shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium">{data.exception.type}</div>
+                    <div className="text-signal-red/80 mt-0.5">
+                      {data.exception.detail}
                     </div>
                   </div>
-                ))}
+                </div>
+              )}
+
+              {/* Horizontal stepper */}
+              <div className={`${CARD} p-5`}>
+                <div className="overflow-x-auto">
+                  <ol className="flex min-w-[560px]">
+                    {timeline.map((step, i) => {
+                      const done = step.state === "done";
+                      const active = step.state === "active";
+                      return (
+                        <li
+                          key={step.label}
+                          className="flex-1 flex flex-col items-center text-center relative"
+                        >
+                          {i < timeline.length - 1 && (
+                            <span
+                              className={`absolute top-4 left-1/2 w-full h-0.5 ${
+                                done ? "bg-signal-teal" : "bg-mist-200"
+                              }`}
+                            />
+                          )}
+                          <span
+                            className={`relative z-10 w-8 h-8 rounded-full border-2 flex items-center justify-center ${
+                              done
+                                ? "bg-signal-teal border-signal-teal text-white"
+                                : active
+                                  ? "bg-signal-blue border-signal-blue text-white ring-4 ring-signal-blue/15"
+                                  : "bg-white border-mist-200 text-ink-600/30"
+                            }`}
+                          >
+                            {done ? (
+                              <Check size={15} strokeWidth={3} />
+                            ) : active ? (
+                              <Icons.MapPin size={14} />
+                            ) : (
+                              <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                            )}
+                          </span>
+                          <span
+                            className={`mt-2 text-xs px-1 ${
+                              active
+                                ? "font-semibold text-signal-blue"
+                                : done
+                                  ? "font-medium text-ink-900"
+                                  : "text-ink-600/45"
+                            }`}
+                          >
+                            {step.label}
+                          </span>
+                          <span className="text-[10px] text-ink-600/40 mt-0.5">
+                            {step.time || "Pending"}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+                <div className="mt-4 pt-3 border-t border-mist-100 flex items-center justify-between gap-3 flex-wrap">
+                  <span className="text-xs text-ink-600/45">
+                    Proceed By: {currentStep.proceedBy || "NA"}
+                  </span>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {statusAction}
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div className="py-6 text-center text-sm text-ink-600/45">
-                No activity history yet.
+            </>
+          )}
+
+          {detailTab === "details" && (
+            <>
+              {/* Package information + product images */}
+              <div className="grid md:grid-cols-5 gap-5">
+                <div className={`${CARD} p-5 md:col-span-3`}>
+                  <h2 className="flex items-center gap-2 font-display font-bold text-sm text-signal-blue mb-3">
+                    <Package size={16} />
+                    Package Information
+                  </h2>
+                  <dl className="grid sm:grid-cols-2 gap-x-6">
+                    <div>
+                      <KV k="Tracking Number" v={data.tk} />
+                      <KV k="Order Number" v={data.order_no || data.order} />
+                      <KV
+                        k="Customer"
+                        v={
+                          custId && custId !== "—"
+                            ? `${custName} (${custId})`
+                            : custName
+                        }
+                      />
+                      <KV k="Created At" v={createdAt} />
+                      <KV
+                        k="Current Status"
+                        v={
+                          <StatusBadge
+                            label={pkgDisplayStatus({
+                              ...data,
+                              status: currentStage,
+                            })}
+                          />
+                        }
+                      />
+                    </div>
+                    <div>
+                      <KV k="Product Name" v={data.product_name} />
+                      <KV k="Category" v={data.cargo_type} />
+                      <KV k="Weight" v={data.weight} />
+                      <KV k="Size" v={sizeLabel(data.size_class)} />
+                      <KV k="CBM" v={data.cbm} />
+                      <KV k="Dimensions" v={dimensionText} />
+                      <KV k="Supplier" v={data.supplier} />
+                      <KV k="Packages" v={packageCountValue} />
+                      <KV k="Container" v={containerNo || "Not Assigned"} />
+                      <KV k="Destination" v={destinationValue} />
+                    </div>
+                  </dl>
+                </div>
+                <div className="md:col-span-2">
+                  <PhotoGallery tk={data.tk} />
+                </div>
               </div>
-            )}
-          </div>
+            </>
+          )}
+
+          {detailTab === "tracking" && (
+            <>
+              {/* Tracking history (vertical list) */}
+              <div className={`${CARD} p-5`}>
+                <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-4">
+                  <Icons.Clock size={16} className="text-ink-600/60" />
+                  Tracking History
+                </h2>
+                <ol>
+                  {historyRows.map((s, i) => {
+                    const isActive = s.state === "active";
+                    return (
+                      <li key={s.label} className="flex gap-3">
+                        <div className="flex flex-col items-center">
+                          <span
+                            className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
+                              isActive
+                                ? "bg-signal-blue/15 border-2 border-signal-blue"
+                                : "bg-signal-teal text-white"
+                            }`}
+                          >
+                            {isActive ? (
+                              <span className="w-1.5 h-1.5 rounded-full bg-signal-blue" />
+                            ) : (
+                              <Check size={11} strokeWidth={3} />
+                            )}
+                          </span>
+                          {i < historyRows.length - 1 && (
+                            <span className="w-px flex-1 bg-mist-200 min-h-[22px]" />
+                          )}
+                        </div>
+                        <div className="flex-1 flex items-start justify-between gap-3 pb-4 min-w-0">
+                          <div>
+                            <div className="text-sm font-medium text-ink-900">
+                              {s.label}
+                            </div>
+                            <div className="text-xs text-ink-600/45">
+                              Proceed By: {s.proceedBy || "NA"}
+                            </div>
+                          </div>
+                          <div className="text-xs text-ink-600/50 whitespace-nowrap">
+                            {s.time || "—"}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+
+              <SlaPackageCard pkg={data} tk={tk} />
+
+              <StatusHistoryCard pkg={data} timeline={timeline} />
+
+              <div className={`${CARD} p-5`}>
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <div>
+                    <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
+                      <Icons.History size={16} className="text-ink-600/60" />
+                      Recent Activity
+                    </h2>
+                    <p className="text-xs text-ink-600/45 mt-0.5">
+                      Latest actions recorded for this package.
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-semibold px-2 py-1 rounded-full bg-mist-100 text-ink-600/55">
+                    {activityRows.length} events
+                  </span>
+                </div>
+                {activityRows.length ? (
+                  <div className="divide-y divide-mist-100">
+                    {activityRows.map((item, i) => (
+                      <div
+                        key={`${item.at || "event"}-${i}`}
+                        className="py-3 first:pt-0 last:pb-0 flex items-start gap-3"
+                      >
+                        <div className="w-7 h-7 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
+                          <Check size={13} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-ink-900">
+                              {item.status || "Package Updated"}
+                            </span>
+                            <span className="text-xs text-ink-600/40">
+                              {item.user || "System"}
+                            </span>
+                          </div>
+                          <div className="text-xs text-ink-600/45 mt-0.5">
+                            {item.at ? formatIso(item.at) : "—"}
+                            {item.remark ? ` · ${item.remark}` : ""}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-6 text-center text-sm text-ink-600/45">
+                    No activity history yet.
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* ============ RIGHT / SIDEBAR ============ */}
