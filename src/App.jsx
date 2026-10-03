@@ -478,17 +478,19 @@ const DEFAULT_CARGO_POLICIES = {
   Normal: {
     sizeRates: { S: 1.5, M: 3, L: 4 },
     weightRate: 600,
-    cbmRate: 200,
-    minimumFreight: 220,
+    cbmRate: 190,
+    minimumFreight: 200,
+    applyMinimumFreight: false,
     deliveryFee: 0,
     branchDeliveryFee: 0,
     handlingFee: 0,
   },
   Sensitive: {
-    sizeRates: { S: 2, M: 4, L: 5.5 },
-    weightRate: 800,
-    cbmRate: 300,
-    minimumFreight: 300,
+    sizeRates: { S: 1.5, M: 3, L: 4 },
+    weightRate: 600,
+    cbmRate: 220,
+    minimumFreight: 240,
+    applyMinimumFreight: false,
     deliveryFee: 0,
     branchDeliveryFee: 0,
     handlingFee: 0,
@@ -540,64 +542,37 @@ function mergeSystemSettings(saved) {
   const value = saved || {};
   const legacyShipping = value.shipping || {};
   const savedCargoPolicies = legacyShipping.cargoPolicies || {};
+  // One shared S/M/L table for Small Package. Legacy Normal/Sensitive size
+  // tables are only used as fallback when the shared table does not exist.
+  const sharedSizeRates = {
+    ...DEFAULT_CARGO_POLICIES.Normal.sizeRates,
+    ...((savedCargoPolicies.Normal || {}).sizeRates || {}),
+    ...(legacyShipping.sizeRates || {}),
+  };
   const cargoPolicies = {
     Normal: {
       ...DEFAULT_CARGO_POLICIES.Normal,
       ...(savedCargoPolicies.Normal || {}),
-      sizeRates: {
-        ...DEFAULT_CARGO_POLICIES.Normal.sizeRates,
-        ...((savedCargoPolicies.Normal || {}).sizeRates || {}),
-      },
+      sizeRates: { ...sharedSizeRates },
     },
     Sensitive: {
       ...DEFAULT_CARGO_POLICIES.Sensitive,
       ...(savedCargoPolicies.Sensitive || {}),
-      sizeRates: {
-        ...DEFAULT_CARGO_POLICIES.Sensitive.sizeRates,
-        ...((savedCargoPolicies.Sensitive || {}).sizeRates || {}),
-      },
+      sizeRates: { ...sharedSizeRates },
     },
   };
-  // If this is an older saved policy with only one set of rates, preserve it
-  // as Normal rather than losing the user's existing values.
-  if (!savedCargoPolicies.Normal && legacyShipping.sizeRates) {
-    cargoPolicies.Normal.sizeRates = {
-      ...cargoPolicies.Normal.sizeRates,
-      ...legacyShipping.sizeRates,
-    };
-    if (legacyShipping.weightRate != null)
-      cargoPolicies.Normal.weightRate = Number(legacyShipping.weightRate);
-    if (legacyShipping.cbmRate != null)
-      cargoPolicies.Normal.cbmRate = Number(legacyShipping.cbmRate);
-    if (legacyShipping.minimumFreight != null)
-      cargoPolicies.Normal.minimumFreight = Number(
-        legacyShipping.minimumFreight,
-      );
-    if (legacyShipping.deliveryFee != null)
-      cargoPolicies.Normal.deliveryFee = Number(legacyShipping.deliveryFee);
-    if (legacyShipping.branchDeliveryFee != null)
-      cargoPolicies.Normal.branchDeliveryFee = Number(
-        legacyShipping.branchDeliveryFee,
-      );
-    if (legacyShipping.handlingFee != null)
-      cargoPolicies.Normal.handlingFee = Number(legacyShipping.handlingFee);
-  }
   return {
     ...DEFAULT_SYSTEM_SETTINGS,
     ...value,
     company: {
       ...DEFAULT_SYSTEM_SETTINGS.company,
       ...(value.company || {}),
-      // logoDataUrl is kept only for backward compatibility with old local data.
       logoDataUrl: value.company?.logoDataUrl || "",
     },
     shipping: {
       ...DEFAULT_SYSTEM_SETTINGS.shipping,
-      ...(value.shipping || {}),
-      sizeRates: {
-        ...DEFAULT_SYSTEM_SETTINGS.shipping.sizeRates,
-        ...((value.shipping || {}).sizeRates || {}),
-      },
+      ...legacyShipping,
+      sizeRates: sharedSizeRates,
       cargoPolicies,
     },
     label: { ...DEFAULT_SYSTEM_SETTINGS.label, ...(value.label || {}) },
@@ -2210,14 +2185,14 @@ function sizeLabel(size) {
   return size === "OVER" ? "Dimension Based (> L)" : size;
 }
 
-// CBM = L × W × H (cm) / 1,000,000, rounded to 3 decimals. Returns null
-// unless all three sides are positive numbers.
+// CBM = L × W × H (cm) / 1,000,000. Keep full precision for pricing;
+// round only when displaying CBM to the user.
 function computeCbm(length, width, height) {
   const l = Number(length);
   const w = Number(width);
   const h = Number(height);
   if (!(l > 0 && w > 0 && h > 0)) return null;
-  return Math.round(((l * w * h) / 1000000) * 1000) / 1000;
+  return (l * w * h) / 1000000;
 }
 
 // S/M/L → fixed price. "OVER" (> L) → CBM × rate for the cargo type.
@@ -2231,61 +2206,68 @@ function calcFreight({
   weight,
 }) {
   const cbm = computeCbm(length, width, height);
-  if (!cargoType)
-    return { ok: false, message: "Please select Cargo Type", cbm };
-
-  const type = cargoType === "Sensitive" ? "Sensitive" : "Normal";
   const policy =
     getSystemSettings().shipping || DEFAULT_SYSTEM_SETTINGS.shipping;
-  const cargoPolicy =
-    (policy.cargoPolicies || DEFAULT_CARGO_POLICIES)[type] ||
-    DEFAULT_CARGO_POLICIES[type];
   const effectivePackageType =
     packageType || (sizeClass === "OVER" ? "dimension_based" : "small_package");
 
+  // Small Package is independent from Normal/Sensitive. S/M/L are fixed prices.
   if (effectivePackageType === "small_package") {
-    if (!["S", "M", "L"].includes(sizeClass)) {
+    if (!["S", "M", "L"].includes(sizeClass))
       return { ok: false, message: "Please select Size S, M or L", cbm };
-    }
-    const rate = Number(cargoPolicy.sizeRates?.[sizeClass] || 0);
+    const rate = Number(policy.sizeRates?.[sizeClass] || 0);
     if (!(rate >= 0))
-      return { ok: false, message: "Size rate is not configured", cbm };
-    const fee = rate;
+      return {
+        ok: false,
+        message: "Small Package size rate is not configured",
+        cbm,
+      };
     return {
       ok: true,
       method: "Fixed Size",
       rate,
       cbm: null,
-      fee: Math.round(fee * 100) / 100,
+      fee: Math.round(rate * 100) / 100,
       policyCurrency: policy.currency || "USD",
-      cargoType: type,
+      cargoType: null,
       packageType: "small_package",
     };
   }
 
-  if (effectivePackageType !== "dimension_based") {
+  if (effectivePackageType !== "dimension_based")
     return { ok: false, message: "Please select a Package Type", cbm };
-  }
-  if (cbm == null) {
+  if (!cargoType)
+    return { ok: false, message: "Please select Normal or Sensitive", cbm };
+  if (cbm == null)
     return {
       ok: false,
       message: "Please enter Length, Width and Height as positive numbers",
       cbm,
     };
-  }
 
-  const configuredCbmRate = Number(cargoPolicy.cbmRate || 0);
-  if (!(configuredCbmRate > 0)) {
+  const type = cargoType === "Sensitive" ? "Sensitive" : "Normal";
+  const cargoPolicy =
+    (policy.cargoPolicies || DEFAULT_CARGO_POLICIES)[type] ||
+    DEFAULT_CARGO_POLICIES[type];
+  const rate = Number(cargoPolicy.cbmRate || 0);
+  if (!(rate > 0))
     return { ok: false, message: `${type} CBM rate is not configured`, cbm };
-  }
 
-  const rate = configuredCbmRate;
-  const fee = Math.max(cbm * rate, Number(cargoPolicy.minimumFreight || 0));
+  // Dimension Based: actual CBM × the selected cargo-type rate.
+  // 190/220 are rates per CBM, never size thresholds.
+  // Minimum Freight is a SPECIAL RULE and is OFF by default.
+  const rawFee = cbm * rate;
+  const minimumFreight = Number(cargoPolicy.minimumFreight || 0);
+  const applyMinimumFreight = cargoPolicy.applyMinimumFreight === true;
+  const fee = applyMinimumFreight ? Math.max(rawFee, minimumFreight) : rawFee;
   return {
     ok: true,
     method: "CBM",
     rate,
     cbm,
+    rawFee: Math.round(rawFee * 100) / 100,
+    minimumFreight,
+    applyMinimumFreight,
     fee: Math.round(fee * 100) / 100,
     policyCurrency: policy.currency || "USD",
     cargoType: type,
@@ -4977,27 +4959,6 @@ function CargoCalculator({
     <div className="space-y-5">
       <div>
         <label className={LABEL_CLS}>
-          Cargo Type <span className="text-signal-red">*</span>
-        </label>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {CARGO_TYPES.map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => selectCargoType(t)}
-              className={`${segBtn(form.cargoType === t)} text-left px-4`}
-            >
-              <span className="block font-semibold">{t} Cargo</span>
-              <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-                {displayMoney(cargoPolicyFor(t, policy).cbmRate)} / CBM
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <label className={LABEL_CLS}>
           Package Type <span className="text-signal-red">*</span>
         </label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -5008,7 +4969,7 @@ function CargoCalculator({
           >
             <span className="block font-semibold">📦 Small Package</span>
             <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-              Use predefined Size S / M / L
+              Select Size S / M / L — fixed price
             </span>
           </button>
           <button
@@ -5018,11 +4979,34 @@ function CargoCalculator({
           >
             <span className="block font-semibold">📐 Dimension Based</span>
             <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-              For cargo larger than Size L
+              Measure actual size and calculate by CBM
             </span>
           </button>
         </div>
       </div>
+
+      {dimensionMode && (
+        <div>
+          <label className={LABEL_CLS}>
+            Cargo Type <span className="text-signal-red">*</span>
+          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {CARGO_TYPES.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => selectCargoType(t)}
+                className={`${segBtn(form.cargoType === t)} text-left px-4`}
+              >
+                <span className="block font-semibold">{t} Cargo</span>
+                <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+                  {displayMoney(cargoPolicyFor(t, policy).cbmRate)} / CBM
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!dimensionMode ? (
         <div>
@@ -5111,7 +5095,9 @@ function CargoCalculator({
         </div>
         <InfoGrid
           items={[
-            { label: "Cargo Type", value: form.cargoType || "—" },
+            ...(dimensionMode
+              ? [{ label: "Cargo Type", value: form.cargoType || "—" }]
+              : []),
             {
               label: "Package Type",
               value: dimensionMode ? "Dimension Based" : "Small Package",
@@ -5119,7 +5105,7 @@ function CargoCalculator({
             {
               label: "Size",
               value: dimensionMode
-                ? "Dimension Based (> L)"
+                ? "Actual Dimensions"
                 : form.sizeClass || "—",
             },
             ...(dimensionMode
@@ -5138,10 +5124,17 @@ function CargoCalculator({
                   : displayMoney(calc.rate)
                 : "—",
             },
-            {
-              label: "Minimum Freight",
-              value: displayMoney(cargoPolicy.minimumFreight),
-            },
+            ...(dimensionMode
+              ? [
+                  {
+                    label: "Minimum Freight",
+                    value:
+                      cargoPolicy.applyMinimumFreight === true
+                        ? `${displayMoney(cargoPolicy.minimumFreight)} · Applied`
+                        : "Not Applied",
+                  },
+                ]
+              : []),
             {
               label: "Freight Fee",
               value: finalFee != null ? displayMoney(finalFee) : "—",
@@ -27636,9 +27629,9 @@ function SettingsPage() {
                     Shipping & Pricing Policy
                   </h2>
                   <p className="text-sm text-slate-500 mt-1">
-                    Configure separate freight rules for Normal and Sensitive
-                    cargo. Small Package uses S / M / L rates; Dimension Based
-                    uses actual CBM.
+                    Small Package uses one shared S / M / L fixed-price table.
+                    Dimension Based uses actual CBM with separate Normal and
+                    Sensitive rates.
                   </p>
                 </div>
                 <div className="p-6 space-y-6">
@@ -27689,6 +27682,57 @@ function SettingsPage() {
                     </div>
                   </div>
 
+                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
+                    <div className="px-5 py-4 bg-slate-50/80 flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900">
+                          Small Package
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          S / M / L are shared fixed prices. They are not Normal
+                          or Sensitive.
+                        </div>
+                      </div>
+                      <span className="rounded-full px-2.5 py-1 text-[11px] font-bold bg-slate-100 text-slate-700">
+                        Fixed Price
+                      </span>
+                    </div>
+                    <div className="p-5">
+                      <div className="grid sm:grid-cols-3 gap-4">
+                        {["S", "M", "L"].map((size) => (
+                          <label
+                            key={size}
+                            className="rounded-xl border border-slate-200 p-4 text-sm font-semibold text-slate-700"
+                          >
+                            <span>Size {size}</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className={input}
+                              value={settings.shipping.sizeRates?.[size] ?? 0}
+                              onChange={(e) =>
+                                setSettings((p) => ({
+                                  ...p,
+                                  shipping: {
+                                    ...p.shipping,
+                                    sizeRates: {
+                                      ...p.shipping.sizeRates,
+                                      [size]: Number(e.target.value || 0),
+                                    },
+                                  },
+                                }))
+                              }
+                            />
+                            <span className="text-xs text-slate-400">
+                              {settings.shipping.currency} · fixed price
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
                   {["Normal", "Sensitive"].map((cargoType) => (
                     <div
                       key={cargoType}
@@ -27699,11 +27743,11 @@ function SettingsPage() {
                       >
                         <div>
                           <div className="font-bold text-slate-900">
-                            {cargoType} Cargo
+                            {cargoType} — Dimension Based
                           </div>
                           <div className="text-xs text-slate-500 mt-0.5">
-                            Separate pricing policy for{" "}
-                            {cargoType.toLowerCase()} shipments.
+                            Actual Length × Width × Height → CBM × {cargoType}{" "}
+                            rate. Minimum is optional.
                           </div>
                         </div>
                         <span
@@ -27715,218 +27759,133 @@ function SettingsPage() {
                         </span>
                       </div>
                       <div className="p-5 space-y-5">
-                        <div>
-                          <div className="text-sm font-bold text-slate-900 mb-3">
-                            Small Package — Size Rates
-                          </div>
-                          <div className="grid sm:grid-cols-3 gap-4">
-                            {["S", "M", "L"].map((size) => (
-                              <label
-                                key={size}
-                                className="rounded-xl border border-slate-200 p-4 text-sm font-semibold text-slate-700"
-                              >
-                                <span>Size {size}</span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  className={input}
-                                  value={
-                                    settings.shipping.cargoPolicies?.[cargoType]
-                                      ?.sizeRates?.[size] ?? 0
-                                  }
-                                  onChange={(e) =>
-                                    setSettings((p) => ({
-                                      ...p,
-                                      shipping: {
-                                        ...p.shipping,
-                                        cargoPolicies: {
-                                          ...p.shipping.cargoPolicies,
-                                          [cargoType]: {
-                                            ...p.shipping.cargoPolicies[
-                                              cargoType
-                                            ],
-                                            sizeRates: {
-                                              ...p.shipping.cargoPolicies[
-                                                cargoType
-                                              ].sizeRates,
-                                              [size]: Number(
-                                                e.target.value || 0,
-                                              ),
-                                            },
-                                          },
+                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                          {[
+                            [
+                              "CBM Rate",
+                              "cbmRate",
+                              `${settings.shipping.currency} / CBM`,
+                            ],
+                            [
+                              "Minimum Freight",
+                              "minimumFreight",
+                              settings.shipping.currency,
+                            ],
+                            [
+                              "Weight Rate",
+                              "weightRate",
+                              `${settings.shipping.currency} / KG`,
+                            ],
+                            [
+                              "Handling / Service Fee",
+                              "handlingFee",
+                              settings.shipping.currency,
+                            ],
+                          ].map(([label, key, unit]) => (
+                            <label
+                              key={key}
+                              className="text-sm font-semibold text-slate-700"
+                            >
+                              {label}
+                              {moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]?.[
+                                  key
+                                ],
+                                (v) =>
+                                  setSettings((p) => ({
+                                    ...p,
+                                    shipping: {
+                                      ...p.shipping,
+                                      cargoPolicies: {
+                                        ...p.shipping.cargoPolicies,
+                                        [cargoType]: {
+                                          ...p.shipping.cargoPolicies[
+                                            cargoType
+                                          ],
+                                          [key]: v,
                                         },
                                       },
-                                    }))
-                                  }
-                                />
-                                <span className="text-xs text-slate-400">
-                                  {settings.shipping.currency} · fixed price
-                                </span>
-                              </label>
-                            ))}
+                                    },
+                                  })),
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {unit}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3 flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 accent-blue-600"
+                            checked={
+                              settings.shipping.cargoPolicies?.[cargoType]
+                                ?.applyMinimumFreight === true
+                            }
+                            onChange={(e) =>
+                              setSettings((p) => ({
+                                ...p,
+                                shipping: {
+                                  ...p.shipping,
+                                  cargoPolicies: {
+                                    ...p.shipping.cargoPolicies,
+                                    [cargoType]: {
+                                      ...p.shipping.cargoPolicies[cargoType],
+                                      applyMinimumFreight: e.target.checked,
+                                    },
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          <div>
+                            <div className="text-sm font-semibold text-amber-900">
+                              Apply Minimum Freight
+                            </div>
+                            <div className="text-xs text-amber-800/75 mt-0.5">
+                              Default OFF. Enable only for a special pricing
+                              case. Normal calculation is always Actual CBM ×
+                              Rate.
+                            </div>
                           </div>
                         </div>
-                        <div>
-                          <div className="text-sm font-bold text-slate-900 mb-3">
-                            Dimension Based — Actual Size
-                          </div>
-                          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-                            <label className="text-sm font-semibold text-slate-700">
-                              CBM Rate
-                              {moneyInput(
-                                settings.shipping.cargoPolicies?.[cargoType]
-                                  ?.cbmRate,
-                                (v) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    shipping: {
-                                      ...p.shipping,
-                                      cargoPolicies: {
-                                        ...p.shipping.cargoPolicies,
-                                        [cargoType]: {
-                                          ...p.shipping.cargoPolicies[
-                                            cargoType
-                                          ],
-                                          cbmRate: v,
-                                        },
-                                      },
-                                    },
-                                  })),
-                              )}
-                              <span className="text-xs text-slate-400">
-                                {settings.shipping.currency} / CBM
-                              </span>
-                            </label>
-                            <label className="text-sm font-semibold text-slate-700">
-                              Minimum Freight
-                              {moneyInput(
-                                settings.shipping.cargoPolicies?.[cargoType]
-                                  ?.minimumFreight,
-                                (v) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    shipping: {
-                                      ...p.shipping,
-                                      cargoPolicies: {
-                                        ...p.shipping.cargoPolicies,
-                                        [cargoType]: {
-                                          ...p.shipping.cargoPolicies[
-                                            cargoType
-                                          ],
-                                          minimumFreight: v,
-                                        },
-                                      },
-                                    },
-                                  })),
-                              )}
-                              <span className="text-xs text-slate-400">
-                                {settings.shipping.currency}
-                              </span>
-                            </label>
-                            <label className="text-sm font-semibold text-slate-700">
-                              Weight Rate
-                              {moneyInput(
-                                settings.shipping.cargoPolicies?.[cargoType]
-                                  ?.weightRate,
-                                (v) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    shipping: {
-                                      ...p.shipping,
-                                      cargoPolicies: {
-                                        ...p.shipping.cargoPolicies,
-                                        [cargoType]: {
-                                          ...p.shipping.cargoPolicies[
-                                            cargoType
-                                          ],
-                                          weightRate: v,
-                                        },
-                                      },
-                                    },
-                                  })),
-                              )}
-                              <span className="text-xs text-slate-400">
-                                {settings.shipping.currency} / KG
-                              </span>
-                            </label>
-                            <label className="text-sm font-semibold text-slate-700">
-                              Handling / Service Fee
-                              {moneyInput(
-                                settings.shipping.cargoPolicies?.[cargoType]
-                                  ?.handlingFee,
-                                (v) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    shipping: {
-                                      ...p.shipping,
-                                      cargoPolicies: {
-                                        ...p.shipping.cargoPolicies,
-                                        [cargoType]: {
-                                          ...p.shipping.cargoPolicies[
-                                            cargoType
-                                          ],
-                                          handlingFee: v,
-                                        },
-                                      },
-                                    },
-                                  })),
-                              )}
-                              <span className="text-xs text-slate-400">
-                                {settings.shipping.currency}
-                              </span>
-                            </label>
-                          </div>
-                        </div>
+
                         <div className="grid md:grid-cols-2 gap-4">
-                          <label className="text-sm font-semibold text-slate-700">
-                            Delivery Fee
-                            {moneyInput(
-                              settings.shipping.cargoPolicies?.[cargoType]
-                                ?.deliveryFee,
-                              (v) =>
-                                setSettings((p) => ({
-                                  ...p,
-                                  shipping: {
-                                    ...p.shipping,
-                                    cargoPolicies: {
-                                      ...p.shipping.cargoPolicies,
-                                      [cargoType]: {
-                                        ...p.shipping.cargoPolicies[cargoType],
-                                        deliveryFee: v,
+                          {[
+                            ["Delivery Fee", "deliveryFee"],
+                            ["Branch Delivery Fee", "branchDeliveryFee"],
+                          ].map(([label, key]) => (
+                            <label
+                              key={key}
+                              className="text-sm font-semibold text-slate-700"
+                            >
+                              {label}
+                              {moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]?.[
+                                  key
+                                ],
+                                (v) =>
+                                  setSettings((p) => ({
+                                    ...p,
+                                    shipping: {
+                                      ...p.shipping,
+                                      cargoPolicies: {
+                                        ...p.shipping.cargoPolicies,
+                                        [cargoType]: {
+                                          ...p.shipping.cargoPolicies[
+                                            cargoType
+                                          ],
+                                          [key]: v,
+                                        },
                                       },
                                     },
-                                  },
-                                })),
-                            )}
-                            <span className="text-xs text-slate-400">
-                              {settings.shipping.currency}
-                            </span>
-                          </label>
-                          <label className="text-sm font-semibold text-slate-700">
-                            Branch Delivery Fee
-                            {moneyInput(
-                              settings.shipping.cargoPolicies?.[cargoType]
-                                ?.branchDeliveryFee,
-                              (v) =>
-                                setSettings((p) => ({
-                                  ...p,
-                                  shipping: {
-                                    ...p.shipping,
-                                    cargoPolicies: {
-                                      ...p.shipping.cargoPolicies,
-                                      [cargoType]: {
-                                        ...p.shipping.cargoPolicies[cargoType],
-                                        branchDeliveryFee: v,
-                                      },
-                                    },
-                                  },
-                                })),
-                            )}
-                            <span className="text-xs text-slate-400">
-                              {settings.shipping.currency}
-                            </span>
-                          </label>
+                                  })),
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {settings.shipping.currency}
+                              </span>
+                            </label>
+                          ))}
                         </div>
                       </div>
                     </div>
